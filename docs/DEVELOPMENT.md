@@ -12,8 +12,8 @@ libraries that MyGo needs.
 ## Run
 
 ```sh
-go run .                                                        # run the app
-go run github.com/egoist/mygo/cmd/mygo@v0.2.15 dev              # MyGo development build
+go run .            # the app
+go run . issue ...  # the certificate command, see ADMISSION.md
 ```
 
 ## Checks
@@ -36,19 +36,25 @@ local DERP relay, so it needs loopback networking.
 
 ## Code map
 
-| File | Purpose |
+The root `main.go` only dispatches: `issue` and `connector-ssh-proxy` go to
+`cmd/`, and everything else starts the window in `app/`.
+
+| Path | Purpose |
 | --- | --- |
-| `main.go` | App lifecycle, tray, window and the main view |
-| `db.go`, `region.go` | SQLite state: hosts, settings, identity, certificates |
-| `identity.go` | The machine's Ed25519 seed and the node keys derived from it |
-| `gate.go`, `cert.go`, `issue.go`, `dial.go` | Admission: probation, approvals, certificates |
-| `connectors.go` | The `Connector` interface shared by the launchers |
-| `sshconnector.go`, `sshconfig.go`, `sshproxy_test.go` | SSH launcher and `connector-ssh-proxy` |
-| `webdav.go`, `webdav_share.go`, `webdavfs.go` | WebDAV service and launcher |
-| `files.go` | Files service (SFTP) and launcher |
-| `rustdesk.go` | RustDesk port forward |
-| `textsender.go` | Send text launcher |
-| `bootstrap.json` | Embedded startup configuration ([Bootstrap](BOOTSTRAP.md)) |
+| `main.go` | Dispatch between the CLI subcommands and the app |
+| `cmd/` | CLI subcommands: `Issue` and `SSHProxy` |
+| `app/` | The window: lifecycle, screens, tray, Send-text popup, approvals list, embedded icons and fonts |
+| `internal/state/` | SQLite state, identity seed, bootstrap trust list, state paths |
+| `internal/admission/` | Who may connect: gate, probation, certificates, dialing |
+| `internal/server/` | Relay region selection for the embedded Tailcat server |
+| `internal/share/` | Loopback share helpers shared by Files and WebDAV |
+| `internal/connector/` | The `Connector` interface and the server-side switches |
+| `internal/connector/ssh/` | SSH launcher, managed SSH config block, `connector-ssh-proxy` |
+| `internal/connector/files/` | Files launcher: WebDAV on loopback, translated to SFTP |
+| `internal/connector/webdav/` | WebDAV launcher: proxies a Mochi host's WebDAV |
+| `internal/connector/rustdesk/` | RustDesk direct-IP forward |
+| `internal/connector/textsender/` | Send-text protocol |
+| `mygo.json` | MyGo app metadata; its icon is `app/resources/icon.png` |
 
 ## Conventions
 
