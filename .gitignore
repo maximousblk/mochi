@@ -1,0 +1,14 @@
+.direnv/
+result
+build/
+dist/
+.mygo/
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.exe
+/mochi
+*.test
+*.out
+.DS_Store
