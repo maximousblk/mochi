@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/ashwin-y/mochi/internal/admission"
-	"github.com/ashwin-y/mochi/internal/connector/rustdesk"
 	"github.com/ashwin-y/mochi/internal/state"
 	"github.com/egoist/mygo/ui"
 	"github.com/tailscale/tailcat"
@@ -24,9 +23,20 @@ import (
 	"tailscale.com/types/key"
 )
 
-// node is one running Mochi: its app, state directory and the tester that
 // quiet discards tailcat's logging in tests.
 func quiet(string, ...any) {}
+
+// clientRow finds k's row in the gate's lists, as the Settings page shows them.
+func clientRow(g *admission.Gate, k key.NodePublic) (admission.Client, bool) {
+	for _, st := range []string{admission.Probation, admission.Rejected, admission.Approved, admission.Blocked} {
+		for _, c := range g.Clients(st) {
+			if c.Key == k {
+				return c, true
+			}
+		}
+	}
+	return admission.Client{}, false
+}
 
 // node is one running Mochi: its app, state directory and the tester that
 // drives its window. Work the app does off the UI thread (starting a server,
@@ -405,7 +415,7 @@ func TestApplication(t *testing.T) {
 		host.until("approval", 5*time.Second, func() bool { return strings.HasPrefix(host.app.status, "Approved ") })
 		host.want(alice.clientKey().String(), "this machine, until")
 		host.wantNot("no certificate")
-		if r := host.app.gate.Lookup(alice.clientKey()); r.State != admission.Approved || r.CA != host.app.gate.SelfFingerprint() {
+		if r, ok := clientRow(host.app.gate, alice.clientKey()); !ok || r.State != admission.Approved || r.CA != host.app.gate.SelfFingerprint() {
 			t.Fatalf("row = %+v", r)
 		}
 	})
@@ -469,25 +479,26 @@ func TestApplication(t *testing.T) {
 		if err := os.MkdirAll(filepath.Join(pf, "RustDesk"), 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(pf, "RustDesk", "RustDesk.exe"), []byte("x"), 0o755); err != nil {
+		// A fake RustDesk.exe that records its arguments, so the launch runs for
+		// real and the test sees what it was started with.
+		argsFile := filepath.Join(pf, "args")
+		fake := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsFile + "\n"
+		if err := os.WriteFile(filepath.Join(pf, "RustDesk", "RustDesk.exe"), []byte(fake), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		t.Setenv("ProgramFiles", pf)
-		var launched []string
-		for _, c := range alice.app.connectors {
-			if r, ok := c.(*rustdesk.Connector); ok {
-				r.Launch = func(exe string, args ...string) error {
-					launched = append([]string{exe}, args...)
-					return nil
-				}
-			}
-		}
 		alice.click("RustDesk launcher")
 		alice.until("the forward to start", time.Minute, func() bool {
 			return strings.HasPrefix(alice.app.status, "RustDesk address copied") || strings.Contains(alice.app.status, "failed")
 		})
 		local := alice.tt.Clipboard()
-		if len(launched) != 3 || launched[1] != "--connect" || launched[2] != local || !strings.HasPrefix(local, "127.0.0.1:") {
+		var launched []string
+		alice.until("RustDesk to start", time.Minute, func() bool {
+			raw, err := os.ReadFile(argsFile)
+			launched = strings.Fields(string(raw))
+			return err == nil && len(launched) == 2
+		})
+		if launched[0] != "--connect" || launched[1] != local || !strings.HasPrefix(local, "127.0.0.1:") {
 			t.Fatalf("launched %q; clipboard %q; status %q", launched, local, alice.app.status)
 		}
 		if !alice.enabledTile("RustDesk launcher") {
@@ -560,7 +571,10 @@ func TestApplication(t *testing.T) {
 			t.Fatal("an unapproved plain client reached a service")
 		}
 		host.click("Approve " + k.Public().String())
-		host.until("approval", 5*time.Second, func() bool { return host.app.gate.Lookup(k.Public()).State == admission.Approved })
+		host.until("approval", 5*time.Second, func() bool {
+			r, ok := clientRow(host.app.gate, k.Public())
+			return ok && r.State == admission.Approved
+		})
 		plain.Close()
 		plain = &tailcat.Client{Server: tailcat.Addr(addr), Key: k}
 		if err := dial(); err != nil {
@@ -573,7 +587,7 @@ func TestApplication(t *testing.T) {
 		host.settings()
 		host.click("Block " + alice.clientKey().String())
 		host.until("the block", 5*time.Second, func() bool { return strings.HasPrefix(host.app.status, "Blocked ") })
-		if host.app.gate.Lookup(alice.clientKey()).State != admission.Blocked {
+		if r, _ := clientRow(host.app.gate, alice.clientKey()); r.State != admission.Blocked {
 			t.Fatal("alice is not blocked")
 		}
 		host.want("Blocked")
@@ -587,14 +601,17 @@ func TestApplication(t *testing.T) {
 			t.Fatal("a blocked client connected")
 		}
 		// Bob, approved by a certificate, is unaffected.
-		if st := host.app.gate.Lookup(bob.clientKey()).State; st != admission.Approved {
-			t.Fatalf("bob's state = %q", st)
+		if r, _ := clientRow(host.app.gate, bob.clientKey()); r.State != admission.Approved {
+			t.Fatalf("bob's state = %q", r.State)
 		}
 	})
 
 	step("the admin lifts the block and alice is back", func(t *testing.T) {
 		host.click("Approve " + alice.clientKey().String())
-		host.until("the approval", 5*time.Second, func() bool { return host.app.gate.Lookup(alice.clientKey()).State == admission.Approved })
+		host.until("the approval", 5*time.Second, func() bool {
+			r, ok := clientRow(host.app.gate, alice.clientKey())
+			return ok && r.State == admission.Approved
+		})
 		alice.click("lab")
 		status := alice.sendText("9000", "back again", time.Minute)
 		if !strings.HasPrefix(status, "Sent ") {

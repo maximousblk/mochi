@@ -46,9 +46,6 @@ type Connector struct {
 	dialing  admission.Dialing
 	forwards map[string]*forward
 	connector.ServerSwitch
-	// Launch starts a program without waiting for it. Tests replace it so no
-	// RustDesk is started.
-	Launch func(exe string, args ...string) error
 }
 
 // New returns the RustDesk launcher. icon is its tile icon.
@@ -57,7 +54,6 @@ func New(icon *ui.SVG, dialing admission.Dialing) *Connector {
 		icon:     icon,
 		dialing:  dialing,
 		forwards: map[string]*forward{},
-		Launch:   share.StartProcess,
 	}
 }
 
@@ -114,7 +110,7 @@ func (c *Connector) Enable(host state.Host) error {
 	c.forwards[host.Address] = f
 	go f.serve()
 
-	if err := c.Launch(exe, "--connect", ln.Addr().String()); err != nil {
+	if err := share.StartProcess(exe, "--connect", ln.Addr().String()); err != nil {
 		delete(c.forwards, host.Address)
 		f.close()
 		return fmt.Errorf("start RustDesk: %w", err)

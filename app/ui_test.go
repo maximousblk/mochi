@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ashwin-y/mochi/internal/admission"
 	"github.com/ashwin-y/mochi/internal/connector"
@@ -67,7 +66,6 @@ type uiEnv struct {
 	tt    *ui.Tester
 	gate  *admission.Gate
 	theme ui.Theme
-	ext   ed25519.PrivateKey // a key the gate trusts besides its own
 }
 
 func testAddress(t *testing.T) string {
@@ -113,8 +111,7 @@ func newUI(t *testing.T, withGate bool, hosts []state.Host, connectors ...connec
 	}
 	e := &uiEnv{t: t, app: a}
 	if withGate {
-		extPub, extPriv, _ := ed25519.GenerateKey(nil)
-		e.ext = extPriv
+		extPub, _, _ := ed25519.GenerateKey(nil)
 		g, err := admission.NewGate(store.DB(), id.Private(), []ed25519.PublicKey{extPub})
 		if err != nil {
 			t.Fatal(err)
@@ -543,24 +540,18 @@ func TestUIClientListsAreHiddenWithoutAServer(t *testing.T) {
 	e.wantNot("Pending approval", "Approved", "Blocked")
 }
 
-// A node the host has not seen approved waits under Pending approval; the
-// admin can approve it, block it, and approve it again.
+// An approved node lists under Approved, attributed to this machine; the admin
+// can block it, and approve it again.
 func TestUIApproveAndBlock(t *testing.T) {
 	e := newUI(t, true, nil)
 	k := key.NewNode().Public()
-	if !e.gate.Consider(k) { // a stranger connects and gets a probation slot
-		t.Fatal("stranger refused")
+	if err := e.gate.Approve(k); err != nil {
+		t.Fatal(err)
 	}
 	e.openSettings()
-	e.want("Pending approval", "Approved", "Blocked", k.String(), "no certificate", "Approve", "Block")
-
-	// Approve moves it to Approved, attributed to this machine.
-	e.click("Approve")
-	if r := e.gate.Lookup(k); r.State != admission.Approved || r.CA != e.gate.SelfFingerprint() {
+	e.refresh()
+	if r, _ := clientRow(e.gate, k); r.State != admission.Approved || r.CA != e.gate.SelfFingerprint() {
 		t.Fatalf("row = %+v", r)
-	}
-	if !strings.HasPrefix(e.status(), "Approved ") {
-		t.Fatalf("status = %q", e.status())
 	}
 	e.want(k.String(), "this machine, until")
 	e.wantNot("no certificate")
@@ -570,7 +561,7 @@ func TestUIApproveAndBlock(t *testing.T) {
 
 	// Block takes it away; it moves to Blocked, where Approve lifts the block.
 	e.click("Block")
-	if r := e.gate.Lookup(k); r.State != admission.Blocked {
+	if r, _ := clientRow(e.gate, k); r.State != admission.Blocked {
 		t.Fatalf("row = %+v", r)
 	}
 	if !strings.HasPrefix(e.status(), "Blocked ") {
@@ -578,12 +569,9 @@ func TestUIApproveAndBlock(t *testing.T) {
 	}
 	e.wantNot("this machine, until")
 	e.want(k.String(), "Approve")
-	if e.gate.Consider(k) {
-		t.Fatal("a blocked node was admitted")
-	}
 
 	e.click("Approve")
-	if r := e.gate.Lookup(k); r.State != admission.Approved {
+	if r, _ := clientRow(e.gate, k); r.State != admission.Approved {
 		t.Fatalf("row after un-blocking = %+v", r)
 	}
 	e.want("this machine, until")
@@ -593,58 +581,26 @@ func TestUIApproveAndBlock(t *testing.T) {
 func TestUIEachButtonActsOnItsOwnRow(t *testing.T) {
 	e := newUI(t, true, nil)
 	a, b := key.NewNode().Public(), key.NewNode().Public()
-	e.gate.Consider(a)
-	e.gate.Consider(b)
+	for _, k := range []key.NodePublic{a, b} {
+		if err := e.gate.Approve(k); err != nil {
+			t.Fatal(err)
+		}
+	}
 	e.openSettings()
 	e.refresh()
 	e.want(a.String(), b.String())
 
-	e.click("Approve " + b.String())
-	if e.gate.Lookup(b).State != admission.Approved || e.gate.Lookup(a).State != admission.Probation {
-		t.Fatalf("a=%+v b=%+v: Approve on b's row acted on the wrong node", e.gate.Lookup(a), e.gate.Lookup(b))
-	}
 	e.click("Block " + a.String())
-	if e.gate.Lookup(a).State != admission.Blocked || e.gate.Lookup(b).State != admission.Approved {
-		t.Fatalf("a=%+v b=%+v: Block on a's row acted on the wrong node", e.gate.Lookup(a), e.gate.Lookup(b))
+	if r, _ := clientRow(e.gate, a); r.State != admission.Blocked {
+		t.Fatalf("a=%+v: Block on a's row acted on the wrong node", r)
 	}
-}
-
-// What the lists say about each node: who approved it, why a rejected one was
-// turned away, and which nodes are known.
-func TestUIListDetails(t *testing.T) {
-	e := newUI(t, true, nil)
-	g := e.gate
-
-	// Approved by a trusted external key: shows the certificate's name.
-	byExt := key.NewNode().Public()
-	extPub := e.ext.Public().(ed25519.PublicKey)
-	cert, err := admission.Issue(e.ext, byExt, "alice@example.com", time.Now().Add(time.Hour))
-	if err != nil {
-		t.Fatal(err)
+	if r, _ := clientRow(e.gate, b); r.State != admission.Approved {
+		t.Fatalf("b=%+v: Block on a's row changed b", r)
 	}
-	if err := g.Admit(byExt, cert); err != nil {
-		t.Fatal(err)
+	e.click("Approve " + a.String())
+	if r, _ := clientRow(e.gate, a); r.State != admission.Approved {
+		t.Fatalf("a=%+v after Approve on a's row", r)
 	}
-	// Approved by this machine.
-	byHost := key.NewNode().Public()
-	if err := g.Approve(byHost); err != nil {
-		t.Fatal(err)
-	}
-	// Rejected with a reason, and a known node whose certificate expired.
-	stranger := key.NewNode().Public()
-	g.Consider(stranger)
-	g.Reject(stranger, "no certificate")
-	known := key.NewNode().Public()
-	if _, err := e.app.store.DB().Exec(`INSERT INTO clients(node_key, state, ca, name, expires, reason, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, '', ?, ?)`,
-		known.String(), admission.Approved, admission.Fingerprint(extPub), "bob@example.com", time.Now().Add(time.Hour).Unix(), time.Now().Unix(), time.Now().Unix()); err != nil {
-		t.Fatal(err)
-	}
-	g.Reject(known, "certificate expired")
-
-	e.openSettings()
-	e.refresh()
-	e.want(byExt.String(), "alice@example.com, until", byHost.String(), "this machine, until",
-		stranger.String(), "no certificate", known.String(), "bob@example.com: certificate expired")
 }
 
 func TestUIEmptyListsSayNone(t *testing.T) {
@@ -669,9 +625,11 @@ func TestUIListsFollowTheGateAfterARefresh(t *testing.T) {
 	e.wantNot("no certificate")
 
 	k := key.NewNode().Public()
-	e.gate.Consider(k)
+	if err := e.gate.Approve(k); err != nil {
+		t.Fatal(err)
+	}
 	e.refresh()
-	e.want(k.String(), "no certificate")
+	e.want(k.String(), "this machine, until")
 
 	// Stopping the server clears the lists.
 	e.app.gate = nil

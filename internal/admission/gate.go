@@ -174,35 +174,12 @@ func (g *Gate) Approve(k key.NodePublic) error {
 // the Settings page.
 func (g *Gate) SelfFingerprint() string { return g.selfFP }
 
-// Lookup returns k's stored row, as the clients table holds it. Its State is
-// empty for a node the gate has never seen.
-func (g *Gate) Lookup(k key.NodePublic) Client {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return g.get(k)
-}
-
 // Block refuses k whatever certificate it presents, and drops it now.
 func (g *Gate) Block(k key.NodePublic) {
 	g.mu.Lock()
 	g.put(Client{Key: k, State: Blocked, Reason: "blocked by admin"})
 	g.mu.Unlock()
 	g.cut(k)
-}
-
-// Admit records cert as an approval of k, as a presented certificate does. It
-// fails if the certificate is not signed by a trusted CA or is not for k.
-func (g *Gate) Admit(k key.NodePublic, cert []byte) error { return g.admit(k, cert) }
-
-// Consider is tailcat's admission decision for k: true if k may use a service
-// now. A stranger gets a probation slot, as it does on connecting.
-func (g *Gate) Consider(k key.NodePublic) bool { return g.allowClient(k) }
-
-// Reject quarantines k with reason, as a failed certificate does.
-func (g *Gate) Reject(k key.NodePublic, reason string) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	g.reject(k, reason)
 }
 
 // Clients lists rows in the given state, newest first.
