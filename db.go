@@ -274,9 +274,9 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, string(encoded))
 }
 
 // Identity returns this machine's identity, creating it on first use. The seed
-// is kept in the POC state DB; production builds should move it to the
-// platform keychain. Installs from before identities existed had a random
-// client key that cannot become a seed, so they start a new identity.
+// is kept in the state database; a keychain is planned. Installs from before
+// identities existed had a random client key that cannot become a seed, so
+// they start a new identity.
 func (s *StateStore) Identity() (Identity, error) {
 	encoded, err := s.StringSetting("identity_seed")
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
