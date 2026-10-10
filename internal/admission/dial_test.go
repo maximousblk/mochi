@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ashwin-y/mochi/internal/testharness"
 	"github.com/tailscale/tailcat"
-	"tailscale.com/tstest/integration"
 	"tailscale.com/types/key"
 )
 
 func dialer(e *env, k key.NodePrivate, certs ...[]byte) *Dialer {
-	d := NewDialer(e.addr, k, func() [][]byte { return certs }, quiet)
+	d := NewDialer(e.addr, k, func() [][]byte { return certs }, testharness.Quiet)
 	e.t.Cleanup(func() { d.Close() })
 	return d
 }
@@ -146,8 +146,8 @@ func TestDialer(t *testing.T) {
 // must not get in the way: the dial goes through, and costs about one extra
 // round trip.
 func TestDialerAgainstAPlainTailcatServer(t *testing.T) {
-	dm := integration.RunDERPAndSTUN(t, quiet, "127.0.0.1")
-	s := &tailcat.Server{Region: dm.Regions[1], Logf: quiet}
+	relay := testharness.Relay(t)
+	s := &tailcat.Server{Region: relay, Logf: testharness.Quiet}
 	s.OnTCP = func(port uint16) func(net.Conn) {
 		if port != echoPort {
 			return nil // a refused connection, as the tailcat CLI does for ports it does not serve
@@ -172,8 +172,8 @@ func TestDialerAgainstAPlainTailcatServer(t *testing.T) {
 		return time.Since(start)
 	}
 
-	bare := &tailcat.Client{Server: s.TailcatAddr(), Key: key.NewNode(), Logf: quiet}
-	d := NewDialer(s.TailcatAddr(), key.NewNode(), nil, quiet)
+	bare := &tailcat.Client{Server: s.TailcatAddr(), Key: key.NewNode(), Logf: testharness.Quiet}
+	d := NewDialer(s.TailcatAddr(), key.NewNode(), nil, testharness.Quiet)
 	t.Cleanup(func() { bare.Close(); d.Close() })
 	bareDial := func() (net.Conn, error) { return bare.DialTCPPort(ctx(20*time.Second), echoPort) }
 	dialerDial := func() (net.Conn, error) { return d.DialTCPPort(ctx(20*time.Second), echoPort) }

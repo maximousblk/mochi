@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/ashwin-y/mochi/internal/state"
+	"github.com/ashwin-y/mochi/internal/testharness"
 	"github.com/tailscale/tailcat"
-	"tailscale.com/tstest/integration"
 	"tailscale.com/types/key"
 )
 
@@ -34,14 +34,14 @@ func tryService(c *tailcat.Client, d time.Duration) bool {
 // region has the same address, and a node approved before the restart gets
 // in afterwards without presenting anything.
 func TestServerRestart(t *testing.T) {
-	dm := integration.RunDERPAndSTUN(t, quiet, "127.0.0.1")
+	relay := testharness.Relay(t)
 	id, psk, db := state.NewIdentity(), tailcat.NewPresharedKey(), openDB(t)
 	start := func() (*Gate, *tailcat.Server) {
 		g, err := NewGate(db, id.Private(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		s := &tailcat.Server{Key: id.NodeKey(state.RoleServer), PresharedKey: psk, Region: dm.Regions[1], Logf: quiet}
+		s := &tailcat.Server{Key: id.NodeKey(state.RoleServer), PresharedKey: psk, Region: relay, Logf: testharness.Quiet}
 		g.Install(s, echoServe)
 		if err := s.Start(); err != nil {
 			t.Fatal(err)
@@ -55,7 +55,7 @@ func TestServerRestart(t *testing.T) {
 	if err := g1.Approve(k.Public()); err != nil {
 		t.Fatal(err)
 	}
-	c := &tailcat.Client{Server: addr, Key: k, Logf: quiet}
+	c := &tailcat.Client{Server: addr, Key: k, Logf: testharness.Quiet}
 	if !canUseService(c) {
 		t.Fatal("approved node refused before the restart")
 	}
@@ -67,7 +67,7 @@ func TestServerRestart(t *testing.T) {
 	if s2.TailcatAddr() != addr {
 		t.Fatal("address changed across a restart with the same key, psk and region")
 	}
-	c2 := &tailcat.Client{Server: addr, Key: k, Logf: quiet}
+	c2 := &tailcat.Client{Server: addr, Key: k, Logf: testharness.Quiet}
 	defer c2.Close()
 	if !canUseService(c2) {
 		t.Fatal("approved node refused after the restart")
@@ -81,14 +81,14 @@ func TestServerRestart(t *testing.T) {
 // PLAN.md). Run with TS_DEBUG_ALWAYS_USE_DERP=1 to take direct paths out of
 // the picture.
 func TestServeAndDialOnOneMachine(t *testing.T) {
-	dm := integration.RunDERPAndSTUN(t, quiet, "127.0.0.1")
+	relay := testharness.Relay(t)
 	idA, idB := state.NewIdentity(), state.NewIdentity()
 	mk := func(id state.Identity) *Gate {
 		g, err := NewGate(openDB(t), id.Private(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		s := &tailcat.Server{Key: id.NodeKey(state.RoleServer), Region: dm.Regions[1], Logf: quiet}
+		s := &tailcat.Server{Key: id.NodeKey(state.RoleServer), Region: relay, Logf: testharness.Quiet}
 		g.Install(s, echoServe)
 		if err := s.Start(); err != nil {
 			t.Fatal(err)
@@ -105,8 +105,8 @@ func TestServeAndDialOnOneMachine(t *testing.T) {
 	if err := gB.Approve(idA.NodeKey(state.RoleClient).Public()); err != nil {
 		t.Fatal(err)
 	}
-	aToB := &tailcat.Client{Server: gB.srv.TailcatAddr(), Key: idA.NodeKey(state.RoleClient), Logf: quiet}
-	mToA := &tailcat.Client{Server: gA.srv.TailcatAddr(), Key: m, Logf: quiet}
+	aToB := &tailcat.Client{Server: gB.srv.TailcatAddr(), Key: idA.NodeKey(state.RoleClient), Logf: testharness.Quiet}
+	mToA := &tailcat.Client{Server: gA.srv.TailcatAddr(), Key: m, Logf: testharness.Quiet}
 	t.Cleanup(func() { aToB.Close(); mToA.Close() })
 
 	const n = 5

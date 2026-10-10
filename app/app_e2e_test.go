@@ -16,15 +16,12 @@ import (
 
 	"github.com/ashwin-y/mochi/internal/admission"
 	"github.com/ashwin-y/mochi/internal/state"
+	"github.com/ashwin-y/mochi/internal/testharness"
 	"github.com/egoist/mygo/ui"
 	"github.com/tailscale/tailcat"
 	"tailscale.com/tailcfg"
-	"tailscale.com/tstest/integration"
 	"tailscale.com/types/key"
 )
-
-// quiet discards tailcat's logging in tests.
-func quiet(string, ...any) {}
 
 // clientRow finds k's row in the gate's lists, as the Settings page shows them.
 func clientRow(g *admission.Gate, k key.NodePublic) (admission.Client, bool) {
@@ -351,9 +348,7 @@ func (a *app) selectedHostName() string {
 // every launcher and setting gets used. Each step sees the effects of the ones
 // before it, as a session does.
 func TestApplication(t *testing.T) {
-	t.Setenv("TS_DEBUG_ALWAYS_USE_DERP", "1")
-	dm := integration.RunDERPAndSTUN(t, quiet, "127.0.0.1")
-	relay := dm.Regions[1]
+	relay := testharness.Relay(t)
 
 	// An organization CA: a machine key the host's build trusts.
 	caPub, caPriv, err := ed25519.GenerateKey(rand.Reader)

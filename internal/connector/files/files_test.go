@@ -9,19 +9,16 @@ import (
 	"testing"
 
 	"github.com/ashwin-y/mochi/internal/admission"
+	"github.com/ashwin-y/mochi/internal/testharness"
 	"github.com/tailscale/tailcat"
-	"tailscale.com/tstest/integration"
 	"tailscale.com/types/key"
 )
-
-func quiet(string, ...any) {}
 
 // A host serving a directory over SFTP on port 22, as a Mochi host does with
 // its Files switch on, is mounted through a loopback WebDAV share that reads
 // the same file.
 func TestFilesShareOverTailcat(t *testing.T) {
-	t.Setenv("TS_DEBUG_ALWAYS_USE_DERP", "1")
-	dm := integration.RunDERPAndSTUN(t, quiet, "127.0.0.1")
+	relay := testharness.Relay(t)
 
 	root := t.TempDir()
 	const content = "shared over tailcat"
@@ -29,23 +26,13 @@ func TestFilesShareOverTailcat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := &tailcat.Server{Region: dm.Regions[1], Logf: quiet}
-	serveSSH := s.SSHConnHandler(tailcat.SSHOptions{
-		Files: &tailcat.FileService{Dir: root, Mode: tailcat.FileServeRW},
+	host := testharness.Host(t, relay, map[uint16]func(net.Conn){
+		22: (&tailcat.Server{}).SSHConnHandler(tailcat.SSHOptions{
+			Files: &tailcat.FileService{Dir: root, Mode: tailcat.FileServeRW},
+		}),
 	})
-	s.OnTCP = func(port uint16) func(net.Conn) {
-		if port != 22 {
-			return nil
-		}
-		return serveSSH
-	}
-	if err := s.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { s.Close() })
 
-	dialing := admission.Dialing{Key: key.NewNode()}
-	fs, err := openShare(dialing, string(s.TailcatAddr()))
+	fs, err := openShare(admission.Dialing{Key: key.NewNode()}, testharness.Address(host))
 	if err != nil {
 		t.Fatalf("open share: %v", err)
 	}

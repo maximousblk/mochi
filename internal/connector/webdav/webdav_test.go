@@ -11,13 +11,10 @@ import (
 	"testing"
 
 	"github.com/ashwin-y/mochi/internal/admission"
-	"github.com/tailscale/tailcat"
+	"github.com/ashwin-y/mochi/internal/testharness"
 	xwebdav "golang.org/x/net/webdav"
-	"tailscale.com/tstest/integration"
 	"tailscale.com/types/key"
 )
-
-func quiet(string, ...any) {}
 
 // newTestHost returns a host's WebDAV service over a temporary root that holds
 // a.txt, and the root.
@@ -110,23 +107,11 @@ func TestLinkRelaysHostService(t *testing.T) {
 // The same share over a real Tailcat tunnel, to a server that serves the
 // WebDAV port as a Mochi host does.
 func TestWebDAVOverTailcat(t *testing.T) {
-	t.Setenv("TS_DEBUG_ALWAYS_USE_DERP", "1")
-	dm := integration.RunDERPAndSTUN(t, quiet, "127.0.0.1")
 	host, root := newTestHost(t)
-	serve := serveHTTPOnConn(host)
-	s := &tailcat.Server{Region: dm.Regions[1], Logf: quiet}
-	s.OnTCP = func(port uint16) func(net.Conn) {
-		if port != ServePort {
-			return nil
-		}
-		return serve
-	}
-	if err := s.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { s.Close() })
+	relay := testharness.Relay(t)
+	server := testharness.Host(t, relay, map[uint16]func(net.Conn){ServePort: serveHTTPOnConn(host)})
 
-	d := admission.NewDialer(s.TailcatAddr(), key.NewNode(), nil, quiet)
+	d := admission.NewDialer(server.TailcatAddr(), key.NewNode(), nil, testharness.Quiet)
 	t.Cleanup(func() { d.Close() })
 	dial := func(ctx context.Context) (net.Conn, error) { return d.DialTCPPort(ctx, ServePort) }
 	l, err := startLink(dial, t.Logf, func() {})

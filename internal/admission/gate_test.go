@@ -14,14 +14,12 @@ import (
 	"time"
 
 	"github.com/ashwin-y/mochi/internal/state"
+	"github.com/ashwin-y/mochi/internal/testharness"
 	"github.com/tailscale/tailcat"
-	"tailscale.com/tstest/integration"
 	"tailscale.com/types/key"
 )
 
 const echoPort = 80
-
-func quiet(string, ...any) {}
 
 func newCA(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 	t.Helper()
@@ -120,7 +118,7 @@ type env struct {
 
 func newEnv(t *testing.T, tweak func(*Gate), trusted ...ed25519.PublicKey) *env {
 	t.Helper()
-	dm := integration.RunDERPAndSTUN(t, quiet, "127.0.0.1")
+	relay := testharness.Relay(t)
 	id := state.NewIdentity()
 	g, err := NewGate(openDB(t), id.Private(), trusted)
 	if err != nil {
@@ -130,7 +128,7 @@ func newEnv(t *testing.T, tweak func(*Gate), trusted ...ed25519.PublicKey) *env 
 	if tweak != nil {
 		tweak(g)
 	}
-	s := &tailcat.Server{Key: id.NodeKey(state.RoleServer), Region: dm.Regions[1], Logf: quiet}
+	s := &tailcat.Server{Key: id.NodeKey(state.RoleServer), Region: relay, Logf: testharness.Quiet}
 	g.Install(s, func(port uint16) func(net.Conn) {
 		if port != echoPort {
 			return nil
@@ -149,7 +147,7 @@ func newEnv(t *testing.T, tweak func(*Gate), trusted ...ed25519.PublicKey) *env 
 
 // client is a stock tailcat client; it sends nothing unless asked to Prove.
 func (e *env) client(k key.NodePrivate) *tailcat.Client {
-	c := &tailcat.Client{Server: e.addr, Key: k, Logf: quiet}
+	c := &tailcat.Client{Server: e.addr, Key: k, Logf: testharness.Quiet}
 	e.t.Cleanup(func() { c.Close() })
 	return c
 }
@@ -487,7 +485,7 @@ func TestTrustedKeysAreReconciledAtStartup(t *testing.T) {
 func TestProbationCap(t *testing.T) {
 	e := newEnv(t, func(g *Gate) { g.MaxProbation = 1 })
 	ping := func(k key.NodePrivate, d time.Duration) bool {
-		c := &tailcat.Client{Server: e.addr, Key: k, Logf: quiet}
+		c := &tailcat.Client{Server: e.addr, Key: k, Logf: testharness.Quiet}
 		defer c.Close()
 		_, err := c.Ping(ctx(d))
 		return err == nil

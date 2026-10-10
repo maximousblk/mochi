@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ashwin-y/mochi/internal/state"
+	"github.com/ashwin-y/mochi/internal/testharness"
 	"tailscale.com/types/key"
 )
 
@@ -128,7 +129,7 @@ func TestKnownNodeRenewsThroughAFullProbation(t *testing.T) {
 
 	// The certificate is made before the tunnel exists, and the first dial can
 	// take several seconds, so it must outlast that.
-	d := NewDialer(e.addr, k, func() [][]byte { return [][]byte{issue(t, extPriv, k.Public(), 9*time.Second)} }, quiet)
+	d := NewDialer(e.addr, k, func() [][]byte { return [][]byte{issue(t, extPriv, k.Public(), 9*time.Second)} }, testharness.Quiet)
 	t.Cleanup(func() { d.Close() })
 	conn, err := d.DialTCPPort(ctx(20*time.Second), echoPort)
 	if err != nil {
@@ -153,7 +154,7 @@ func TestKnownNodeRenewsThroughAFullProbation(t *testing.T) {
 	if _, err := other.Client.Ping(ctx(3 * time.Second)); err == nil {
 		t.Fatal("a second stranger got a slot")
 	}
-	d2 := NewDialer(e.addr, k, func() [][]byte { return [][]byte{issue(t, extPriv, k.Public(), time.Hour)} }, quiet)
+	d2 := NewDialer(e.addr, k, func() [][]byte { return [][]byte{issue(t, extPriv, k.Public(), time.Hour)} }, testharness.Quiet)
 	t.Cleanup(func() { d2.Close() })
 	conn, err = d2.DialTCPPort(ctx(20*time.Second), echoPort)
 	if err != nil {
