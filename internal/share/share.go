@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -93,7 +94,9 @@ func RequirePrefix(prefix string, next http.Handler) http.Handler {
 			serveRootProbe(w, r)
 			return
 		}
-		if r.URL.Path != prefix && !strings.HasPrefix(r.URL.Path, prefix+"/") {
+		// Check the cleaned path, so "/prefix/../x" cannot pass as inside the share.
+		cleaned := path.Clean(r.URL.Path)
+		if cleaned != prefix && !strings.HasPrefix(cleaned, prefix+"/") {
 			http.NotFound(w, r)
 			return
 		}
