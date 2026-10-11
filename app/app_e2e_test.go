@@ -470,18 +470,7 @@ func TestApplication(t *testing.T) {
 	})
 
 	step("the RustDesk launcher forwards the host's direct-IP port and starts the client", func(t *testing.T) {
-		pf := t.TempDir()
-		if err := os.MkdirAll(filepath.Join(pf, "RustDesk"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		// A fake RustDesk.exe that records its arguments, so the launch runs for
-		// real and the test sees what it was started with.
-		argsFile := filepath.Join(pf, "args")
-		fake := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsFile + "\n"
-		if err := os.WriteFile(filepath.Join(pf, "RustDesk", "RustDesk.exe"), []byte(fake), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		t.Setenv("ProgramFiles", pf)
+		argsFile := testharness.FakeRustDesk(t)
 		alice.click("RustDesk launcher")
 		alice.until("the forward to start", time.Minute, func() bool {
 			return strings.HasPrefix(alice.app.status, "RustDesk address copied") || strings.Contains(alice.app.status, "failed")

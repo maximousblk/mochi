@@ -4,7 +4,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,31 +14,12 @@ import (
 	"tailscale.com/types/key"
 )
 
-// installFakeRustDesk puts a RustDesk.exe under a fake Program Files that
-// records its arguments, and returns the file the arguments are written to.
-func installFakeRustDesk(t *testing.T) string {
-	t.Helper()
-	programFiles := t.TempDir()
-	t.Setenv("ProgramFiles", programFiles)
-	t.Setenv("ProgramFiles(x86)", t.TempDir())
-	dir := filepath.Join(programFiles, "RustDesk")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	argsFile := filepath.Join(programFiles, "args")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argsFile + "\n"
-	if err := os.WriteFile(filepath.Join(dir, "RustDesk.exe"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return argsFile
-}
-
 // Enabling a host whose direct-IP port is open forwards that port to a local
 // address, launches RustDesk on it, and carries traffic both ways until the
 // launcher is disabled.
 func TestEnableForwardsDirectIPAndLaunchesRustDesk(t *testing.T) {
 	relay := testharness.Relay(t)
-	argsFile := installFakeRustDesk(t)
+	argsFile := testharness.FakeRustDesk(t)
 	server := testharness.Host(t, relay, map[uint16]func(net.Conn){
 		DirectPort: func(c net.Conn) { defer c.Close(); io.Copy(c, c) }, // an echo for the RustDesk port
 	})
@@ -96,7 +76,7 @@ func TestEnableForwardsDirectIPAndLaunchesRustDesk(t *testing.T) {
 // leaves nothing running.
 func TestEnableRefusesHostWithDirectIPOff(t *testing.T) {
 	relay := testharness.Relay(t)
-	installFakeRustDesk(t)
+	testharness.FakeRustDesk(t)
 	server := testharness.Host(t, relay, nil) // no RustDesk port served
 	host := state.Host{Name: "lab", Address: testharness.Address(server)}
 	c := New(nil, admission.Dialing{Key: key.NewNode()})
