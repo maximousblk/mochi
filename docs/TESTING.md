@@ -37,6 +37,7 @@ Coverage numbers are a diagnostic, not a goal.
 | Removing a host disconnects its clients before deleting it | `app/connections_test.go` |
 | Clients idle for six hours are disconnected | `app/connections_test.go` |
 | WebDAV share reads, lists, writes and moves through a tunnel | `internal/connector/webdav/webdav_test.go` |
+| WebDAV server side is unhealthy without disk access, and asks for it once | `internal/connector/webdav/webdav_test.go` |
 | Share addresses and request logs | `internal/share/share_test.go` |
 | RustDesk tunnels direct IP, launches the client, refuses when direct IP is off, and disconnects when the launch fails | `internal/connector/rustdesk/connect_test.go` |
 | RustDesk install location | `internal/connector/rustdesk/executable_test.go` |

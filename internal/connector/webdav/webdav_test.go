@@ -131,6 +131,7 @@ func TestListenServesOnlyWhileOn(t *testing.T) {
 	}
 
 	c := newConnector(ports, nil, nil, admission.Dialing{}, newRoot(t), t.Logf)
+	c.hasAccess, c.requestAccess = func() bool { return true }, func() {}
 	if c.Healthy() {
 		t.Fatal("healthy before Listen")
 	}
@@ -145,5 +146,34 @@ func TestListenServesOnlyWhileOn(t *testing.T) {
 	}
 	if ports.Registered(ServePort) || c.Healthy() {
 		t.Fatal("WebDAV port served after Stop")
+	}
+}
+
+// While serving without access to every folder (Full Disk Access on macOS), the
+// server side is unhealthy, and the user is asked for access once, not on every
+// check. Once access is granted it is healthy. A launcher that is off never asks.
+func TestHealthyNeedsDiskAccessAndAsksOnce(t *testing.T) {
+	c := newConnector(connector.NewPorts(), nil, nil, admission.Dialing{}, newRoot(t), t.Logf)
+	access, asked := false, 0
+	c.hasAccess = func() bool { return access }
+	c.requestAccess = func() { asked++ }
+
+	if c.Healthy() || asked != 0 {
+		t.Fatalf("off: healthy=%v asked=%d; want unhealthy and no request", c.Healthy(), asked)
+	}
+	if err := c.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if c.Healthy() {
+			t.Fatal("healthy without disk access")
+		}
+	}
+	if asked != 1 {
+		t.Fatalf("asked for access %d times over three checks; want once", asked)
+	}
+	access = true
+	if !c.Healthy() {
+		t.Fatal("unhealthy after access was granted")
 	}
 }
