@@ -29,7 +29,7 @@ The flake has `Mochi` and `MochiInstaller` for six systems:
 Linux, so `nix build .#packages.x86_64-windows.MochiInstaller` works on Linux.
 The macOS `MochiInstaller` (a disk image) needs macOS's `hdiutil`, so it fails
 on Linux with that reason. `Mochi.app` for macOS is built on Linux and is
-unsigned; sign it on a Mac.
+unsigned; sign it on a Mac with `scripts/sign-macos.sh` (see below).
 
 From a checkout:
 
@@ -69,8 +69,14 @@ go build -o mochi .
 
 - **Linux:** the tray uses AppIndicator, which reports no clicks. Use the tray
   menu's **Open Mochi** instead of double-clicking.
-- **macOS:** the code builds in the development shell, but no package or app is
-  exposed for it yet.
+- **macOS:** after copying a new `Mochi.app` into place, sign it on the Mac
+  with `scripts/sign-macos.sh [path/to/Mochi.app]`, then start it. macOS keys
+  the permissions it grants, such as Full Disk Access, to the app's signature.
+  An unsigned build has a new one every time, so each install would need them
+  granted again. The script signs with one self-signed identity, "Mochi Local
+  Signing", created in the login keychain on its first run, so a grant lasts
+  across installs. Set `KEYCHAIN_PASSWORD` to the login password to run it
+  over SSH without a keychain prompt.
 - **Windows:** the tray double-click opens the window.
 
 Mochi stores its data in the user config directory. See [State](STATE.md).
