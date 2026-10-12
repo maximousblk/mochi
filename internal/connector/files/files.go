@@ -54,7 +54,7 @@ type Connector struct {
 // New returns the Files launcher. icon is its tile icon.
 func New(icon *ui.SVG, dialing admission.Dialing) *Connector {
 	c := &Connector{icon: icon, dialing: dialing, shares: map[string]*fileShare{}}
-	c.SetServerEnabled(true)
+	c.Listen()
 	return c
 }
 
@@ -79,10 +79,10 @@ func (c *Connector) URL(host state.Host) string {
 	return ""
 }
 
-// Enable connects to the host, starts serving its files on loopback, and opens
+// Connect connects to the host, starts serving its files on loopback, and opens
 // the share in the platform file manager. If the file manager cannot be
 // started, the share is closed again.
-func (c *Connector) Enable(host state.Host) error {
+func (c *Connector) Connect(host state.Host) error {
 	if c.Enabled(host) {
 		return nil
 	}
@@ -99,9 +99,9 @@ func (c *Connector) Enable(host state.Host) error {
 	return nil
 }
 
-// Disable closes the share for host. It is idempotent, and it never fails:
+// Disconnect closes the share for host. It is idempotent, and it never fails:
 // the host's cleanup must not be blocked by a connection that is already gone.
-func (c *Connector) Disable(host state.Host) error {
+func (c *Connector) Disconnect(host state.Host) error {
 	s, ok := c.shares[host.Address]
 	if !ok {
 		return nil

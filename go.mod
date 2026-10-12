@@ -3,6 +3,7 @@ module github.com/ashwin-y/mochi
 go 1.27.1
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/egoist/mygo v0.4.5
 	github.com/fxamacker/cbor/v2 v2.9.3
 	github.com/pkg/sftp v1.13.11
@@ -16,7 +17,6 @@ require (
 require (
 	9fans.net/go v0.0.8-0.20250307142834-96bdba94b63f // indirect
 	filippo.io/edwards25519 v1.2.0 // indirect
-	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
 	github.com/alexbrainman/sspi v0.0.0-20250919150558-7d374ff0d59e // indirect
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect

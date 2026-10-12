@@ -26,7 +26,7 @@ func TestEnableForwardsDirectIPAndLaunchesRustDesk(t *testing.T) {
 	host := state.Host{Name: "lab", Address: testharness.Address(server)}
 	c := New(nil, admission.Dialing{Key: key.NewNode()})
 
-	if err := c.Enable(host); err != nil {
+	if err := c.Connect(host); err != nil {
 		t.Fatalf("enable: %v", err)
 	}
 	local := c.URL(host)
@@ -60,7 +60,7 @@ func TestEnableForwardsDirectIPAndLaunchesRustDesk(t *testing.T) {
 		t.Fatalf("RustDesk was started with %q; want --connect %s", launched, local)
 	}
 
-	if err := c.Disable(host); err != nil {
+	if err := c.Disconnect(host); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
 	if c.URL(host) != "" {
@@ -81,7 +81,7 @@ func TestEnableRefusesHostWithDirectIPOff(t *testing.T) {
 	host := state.Host{Name: "lab", Address: testharness.Address(server)}
 	c := New(nil, admission.Dialing{Key: key.NewNode()})
 
-	err := c.Enable(host)
+	err := c.Connect(host)
 	if err == nil || !strings.Contains(err.Error(), "does not accept RustDesk direct IP") {
 		t.Fatalf("enable error = %v; want the direct-IP refusal", err)
 	}

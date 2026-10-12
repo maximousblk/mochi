@@ -165,10 +165,10 @@ func (c *Connector) URL(host state.Host) string {
 	return ""
 }
 
-// Enable connects to the host, starts the loopback share, and opens it in the
+// Connect connects to the host, starts the loopback share, and opens it in the
 // platform file manager. If the file manager cannot be started, the share is
 // closed again.
-func (c *Connector) Enable(host state.Host) error {
+func (c *Connector) Connect(host state.Host) error {
 	if c.Enabled(host) {
 		return nil
 	}
@@ -184,9 +184,9 @@ func (c *Connector) Enable(host state.Host) error {
 	return nil
 }
 
-// Disable closes the share for host. It is idempotent, and it never fails:
+// Disconnect closes the share for host. It is idempotent, and it never fails:
 // the host's cleanup must not be blocked by a connection that is already gone.
-func (c *Connector) Disable(host state.Host) error {
+func (c *Connector) Disconnect(host state.Host) error {
 	l, ok := c.shares[host.Address]
 	if !ok {
 		return nil

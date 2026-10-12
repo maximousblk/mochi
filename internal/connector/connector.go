@@ -24,12 +24,16 @@ type Connector interface {
 	Icon() *ui.SVG
 	SetHosts([]state.Host)
 	Enabled(state.Host) bool
-	Enable(state.Host) error
-	Disable(state.Host) error
+	Connect(state.Host) error
+	Disconnect(state.Host) error
 
 	// ServerEnabled reports whether this machine offers the connector's service.
 	ServerEnabled() bool
-	SetServerEnabled(on bool)
+	// Listen turns the service on, doing any setup it needs. If the setup
+	// fails the service stays off and the error says why.
+	Listen() error
+	// StopListening turns the service off.
+	StopListening() error
 	// ServerServe adds the service to sv. Called only while ServerEnabled is true.
 	ServerServe(sv *ServerServices)
 }
@@ -50,8 +54,13 @@ type ServerServices struct {
 // while the UI writes it, so it is atomic.
 type ServerSwitch struct{ on atomic.Bool }
 
-func (s *ServerSwitch) ServerEnabled() bool      { return s.on.Load() }
-func (s *ServerSwitch) SetServerEnabled(on bool) { s.on.Store(on) }
+func (s *ServerSwitch) ServerEnabled() bool { return s.on.Load() }
+
+// Listen turns the service on. A connector with setup overrides it.
+func (s *ServerSwitch) Listen() error { s.on.Store(true); return nil }
+
+// StopListening turns the service off.
+func (s *ServerSwitch) StopListening() error { s.on.Store(false); return nil }
 
 // SettingKey is the settings key a connector's server-side switch is saved under.
 func SettingKey(c Connector) string {

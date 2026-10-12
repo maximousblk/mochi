@@ -23,8 +23,8 @@ func (c *fakeConnector) ServerServe(*connector.ServerServices) {}
 func (c *fakeConnector) Icon() *ui.SVG                         { return nil }
 func (c *fakeConnector) SetHosts([]state.Host)                 {}
 func (c *fakeConnector) Enabled(state.Host) bool               { return false }
-func (c *fakeConnector) Enable(state.Host) error               { return nil }
-func (c *fakeConnector) Disable(state.Host) error {
+func (c *fakeConnector) Connect(state.Host) error              { return nil }
+func (c *fakeConnector) Disconnect(state.Host) error {
 	c.calls++
 	if c.beforeDrop != nil {
 		if err := c.beforeDrop(); err != nil {

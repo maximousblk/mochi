@@ -180,8 +180,14 @@ func (a *app) load(store *state.StateStore) (err error) {
 	for _, c := range a.connectors {
 		on, err := store.BoolSetting(connector.SettingKey(c))
 		switch {
+		case err == nil && on:
+			if err := c.Listen(); err != nil {
+				a.status = c.Name() + " server not started: " + err.Error()
+			}
 		case err == nil:
-			c.SetServerEnabled(on)
+			if err := c.StopListening(); err != nil {
+				a.status = c.Name() + " server not stopped: " + err.Error()
+			}
 		case !errors.Is(err, sql.ErrNoRows):
 			return fmt.Errorf("loading %s server setting: %w", c.Name(), err)
 		}
@@ -288,7 +294,7 @@ func (a *app) removeHost(index int) error {
 	host := a.hosts[index]
 	var cleanupErrors []error
 	for _, c := range a.connectors {
-		if err := c.Disable(host); err != nil {
+		if err := c.Disconnect(host); err != nil {
 			cleanupErrors = append(cleanupErrors, fmt.Errorf("%s: %w", c.Name(), err))
 		}
 	}

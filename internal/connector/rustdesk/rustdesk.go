@@ -4,7 +4,8 @@
 // `RustDesk.exe --connect 127.0.0.1:<port>`. The address is also copied to the
 // clipboard. Enabling checks that the host accepts the connection first. If
 // RustDesk is not installed in Program Files, Enable fails and nothing is left
-// running. Disabling closes the forward. Nothing is written to disk.
+// running. Disabling closes the forward. Turning the server side on sets
+// direct IP access in RustDesk's settings file (see Listen).
 package rustdesk
 
 import (
@@ -76,10 +77,10 @@ func (c *Connector) URL(host state.Host) string {
 	return ""
 }
 
-// Enable checks that the host accepts direct-IP connections, starts the
+// Connect checks that the host accepts direct-IP connections, starts the
 // forward, and launches RustDesk on it. If RustDesk cannot be launched, the
 // forward is closed again and the error says so.
-func (c *Connector) Enable(host state.Host) error {
+func (c *Connector) Connect(host state.Host) error {
 	if c.Enabled(host) {
 		return nil
 	}
@@ -118,8 +119,8 @@ func (c *Connector) Enable(host state.Host) error {
 	return nil
 }
 
-// Disable stops the forward for host. It is idempotent.
-func (c *Connector) Disable(host state.Host) error {
+// Disconnect stops the forward for host. It is idempotent.
+func (c *Connector) Disconnect(host state.Host) error {
 	f, ok := c.forwards[host.Address]
 	if !ok {
 		return nil

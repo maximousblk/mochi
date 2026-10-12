@@ -12,6 +12,7 @@ import (
 	"github.com/ashwin-y/mochi/internal/admission"
 	"github.com/ashwin-y/mochi/internal/connector"
 	"github.com/ashwin-y/mochi/internal/state"
+	"github.com/ashwin-y/mochi/internal/testharness"
 	"github.com/egoist/mygo/ui"
 	"github.com/tailscale/tailcat"
 	"tailscale.com/types/key"
@@ -39,7 +40,7 @@ func (c *toggleConnector) Name() string              { return c.name }
 func (c *toggleConnector) Icon() *ui.SVG             { return webdavIcon }
 func (c *toggleConnector) SetHosts([]state.Host)     {}
 func (c *toggleConnector) Enabled(h state.Host) bool { return c.on[h.Address] }
-func (c *toggleConnector) Enable(h state.Host) error {
+func (c *toggleConnector) Connect(h state.Host) error {
 	c.enables++
 	if c.enableErr != nil {
 		return c.enableErr
@@ -47,7 +48,7 @@ func (c *toggleConnector) Enable(h state.Host) error {
 	c.on[h.Address] = true
 	return nil
 }
-func (c *toggleConnector) Disable(h state.Host) error {
+func (c *toggleConnector) Disconnect(h state.Host) error {
 	c.disables++
 	delete(c.on, h.Address)
 	return nil
@@ -82,6 +83,7 @@ func testAddress(t *testing.T) string {
 // leaves a.gate nil when false, as when the server is stopped.
 func newUI(t *testing.T, withGate bool, hosts []state.Host, connectors ...connector.Connector) *uiEnv {
 	t.Helper()
+	testharness.IsolateUserDirs(t)
 	if err := registerFonts(); err != nil {
 		t.Fatal(err)
 	}

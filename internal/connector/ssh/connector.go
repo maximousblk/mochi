@@ -37,7 +37,7 @@ func New(configPath string, icon *ui.SVG) *Connector {
 		icon:       icon,
 		enabled:    make(map[string]bool),
 	}
-	c.SetServerEnabled(true)
+	c.Listen()
 	return c
 }
 
@@ -147,11 +147,11 @@ func (c *Connector) Refresh(hosts []state.Host) error {
 	return nil
 }
 
-func (c *Connector) Enable(host state.Host) error {
+func (c *Connector) Connect(host state.Host) error {
 	return c.set(host, true)
 }
 
-func (c *Connector) Disable(host state.Host) error {
+func (c *Connector) Disconnect(host state.Host) error {
 	return c.set(host, false)
 }
 

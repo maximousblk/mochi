@@ -141,9 +141,9 @@ func (a *app) hostView(c *ui.Context) {
 			if launcherTile(c, lc.Name(), "Toggle "+lc.Name()+" connector", lc.Icon(), enabled).Clicked() {
 				var err error
 				if enabled {
-					err = lc.Disable(*host)
+					err = lc.Disconnect(*host)
 				} else {
-					err = lc.Enable(*host)
+					err = lc.Connect(*host)
 				}
 				if err != nil {
 					a.status = lc.Name() + " connector failed: " + err.Error()
@@ -236,8 +236,15 @@ func (a *app) settingsView(c *ui.Context) {
 		for _, lc := range a.connectors {
 			on := lc.ServerEnabled()
 			if launcherTile(c, lc.Name(), "Let other machines use "+lc.Name(), lc.Icon(), on).Clicked() {
-				lc.SetServerEnabled(!on)
-				if err := a.store.SetBool(connector.SettingKey(lc), !on); err != nil {
+				var err error
+				if on {
+					err = lc.StopListening()
+				} else {
+					err = lc.Listen()
+				}
+				if err != nil {
+					a.status = lc.Name() + " server not changed: " + err.Error()
+				} else if err := a.store.SetBool(connector.SettingKey(lc), !on); err != nil {
 					a.status = "Saving " + lc.Name() + " setting failed: " + err.Error()
 				}
 			}

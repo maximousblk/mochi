@@ -20,7 +20,7 @@ func TestManagedSSHConfigTogglePreservesUserConfig(t *testing.T) {
 	}
 	host := state.Host{Name: "lab machine", Address: "tcExampleAddress"}
 	c := New(path, nil)
-	if err := c.Enable(host); err != nil {
+	if err := c.Connect(host); err != nil {
 		t.Fatalf("enable: %v", err)
 	}
 	data, err := os.ReadFile(path)
@@ -38,7 +38,7 @@ func TestManagedSSHConfigTogglePreservesUserConfig(t *testing.T) {
 	if !strings.Contains(text, "ProxyCommand "+quoteProxyExecutable(executable)+" connector-ssh-proxy "+host.Address+" %p") {
 		t.Fatalf("ProxyCommand does not use current absolute executable path: %q", text)
 	}
-	if err := c.Disable(host); err != nil {
+	if err := c.Disconnect(host); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
 	data, err = os.ReadFile(path)
