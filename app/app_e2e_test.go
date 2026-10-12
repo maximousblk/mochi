@@ -258,10 +258,11 @@ func (n *node) sentTo(port uint16) string {
 // whole and clickable, however far the page was scrolled. A negative wheel
 // delta scrolls up.
 func (n *node) scrollToTop() {
-	for i := 0; i < 40; i++ {
-		n.tt.Scroll(uiWidth/2, uiHeight/2, 0, -400)
-	}
-	n.pump()
+	n.app.pageScroll.ScrollTo(0, 0, ui.Animation{})
+	n.until("the page to reach its top", 5*time.Second, func() bool {
+		n.pump()
+		return !n.app.pageScroll.Scrolling()
+	})
 }
 
 // toggleServer flips the "Enable Tailcat server" switch, the last thing on its row.
@@ -626,6 +627,7 @@ func TestApplication(t *testing.T) {
 
 	step("the host stops its server from Settings", func(t *testing.T) {
 		host.settings()
+		host.scrollToTop()
 		host.toggleServer()
 		host.until("the server to stop", 30*time.Second, func() bool { return host.app.status == "Server stopped" })
 		if host.app.serverAddr != "" {

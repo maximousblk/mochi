@@ -41,7 +41,7 @@
           pname = "mochi";
           version = "0.1.0";
           src = self;
-          vendorHash = "sha256-8EzDap0awbgGXFUhDkrjwx/NUtFi/8KxFsCHdizA9MM=";
+          vendorHash = "sha256-AqLHr35Ur890OwgLSl/YCa/PogmvGpQoRgaZZQNrXmM=";
 
           env.CGO_ENABLED = "1";
           nativeBuildInputs = [ pkgs.pkg-config pkgs.makeWrapper ];

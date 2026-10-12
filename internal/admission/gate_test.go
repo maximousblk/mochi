@@ -490,7 +490,9 @@ func TestProbationCap(t *testing.T) {
 		_, err := c.Ping(ctx(d))
 		return err == nil
 	}
-	if !ping(key.NewNode(), 5*time.Second) {
+	// The first contact goes through the relay and sets it up, which can take
+	// several seconds, as the other first dials in this package allow.
+	if !ping(key.NewNode(), 20*time.Second) {
 		t.Fatal("first stranger refused")
 	}
 	// The one slot is held until the first stranger's proof times out.

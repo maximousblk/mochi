@@ -3,7 +3,7 @@ module github.com/ashwin-y/mochi
 go 1.27.1
 
 require (
-	github.com/egoist/mygo v0.2.15
+	github.com/egoist/mygo v0.4.5
 	github.com/fxamacker/cbor/v2 v2.9.3
 	github.com/pkg/sftp v1.13.11
 	github.com/tailscale/tailcat v0.7.1-0.20261007201807-52fbad323e9d

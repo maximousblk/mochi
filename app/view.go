@@ -54,7 +54,7 @@ func (a *app) view(c *ui.Context) {
 			})
 
 			ui.Column(c).Grow(1).AlignItems(ui.Stretch).Children(func() {
-				ui.Scroll(c).Grow(1).Padding(28).Gap(16).AlignItems(ui.Stretch).Children(func() {
+				ui.Scroll(c).TrackScroll(&a.pageScroll).Grow(1).Padding(28).Gap(16).AlignItems(ui.Stretch).Children(func() {
 					switch {
 					case a.showSettings:
 						a.settingsView(c)
@@ -165,7 +165,7 @@ func (a *app) hostView(c *ui.Context) {
 }
 
 // launcherTile is a square launcher: accent-filled while enabled.
-func launcherTile(c *ui.Context, name, tooltip string, icon *ui.SVG, enabled bool) *ui.Element {
+func launcherTile(c *ui.Context, name, tooltip string, icon *ui.SVG, enabled bool) ui.Element {
 	theme := c.Theme()
 	tile := ui.Button(c, "").Label(name + " launcher").Tooltip(tooltip).Width(104).Height(92)
 	if enabled {
@@ -192,7 +192,7 @@ func (a *app) copyButton(c *ui.Context, value, label string) {
 }
 
 // iconButton is a flat square icon button.
-func iconButton(c *ui.Context, icon *ui.SVG, tooltip string) *ui.Element {
+func iconButton(c *ui.Context, icon *ui.SVG, tooltip string) ui.Element {
 	t := c.Theme()
 	return flatButton(c, tooltip, func() {
 		ui.Icon(c, icon).Size(18, 18).TextColor(t.TextMuted)
@@ -201,7 +201,7 @@ func iconButton(c *ui.Context, icon *ui.SVG, tooltip string) *ui.Element {
 
 // flatButton is a button with no face or border: its background darkens
 // only while hovered, a step further while pressed.
-func flatButton(c *ui.Context, tooltip string, content func()) *ui.Element {
+func flatButton(c *ui.Context, tooltip string, content func()) ui.Element {
 	t := c.Theme()
 	b := ui.ButtonBase(c).Radius(t.Radius).Padding(t.Space(1), t.Space(1.5)).Tooltip(tooltip).Label(tooltip)
 	b.Children(content)
@@ -227,20 +227,10 @@ func nodeIDFromAddress(address string) string {
 func (a *app) settingsView(c *ui.Context) {
 	theme := c.Theme()
 	ui.Text(c, "Settings").FontSize(24).Bold()
-	changed := false
 	ui.Row(c).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "Enable Tailcat server").Grow(1)
-		changed = ui.Switch(c, &a.serverEnabled).Disabled(a.serverBusy).Label("Enable Tailcat server").Changed()
+		ui.Switch(c, &a.serverEnabled).Disabled(a.serverBusy).Label("Enable Tailcat server").OnChange(a.serverSwitched)
 	})
-	if changed && !a.serverBusy {
-		if err := a.store.SetBool("server_enabled", a.serverEnabled); err != nil {
-			a.status = "Saving server setting failed: " + err.Error()
-		} else if a.serverEnabled {
-			a.startServer()
-		} else {
-			a.stopServer()
-		}
-	}
 	ui.Text(c, "Connectors").FontSize(18).Bold()
 	ui.Row(c).Gap(12).Children(func() {
 		for _, lc := range a.connectors {

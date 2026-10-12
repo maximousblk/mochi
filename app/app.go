@@ -57,6 +57,10 @@ type app struct {
 	tray          *mygo.Tray
 	quitting      bool
 
+	// pageScroll is where the content scrolls, so the app can bring it back to
+	// the top, as the Settings page needs after a switch is flipped.
+	pageScroll ui.ScrollState
+
 	// Seams for tests; all nil in the real app.
 	runOnUI    func(func())
 	relay      *tailcfg.DERPRegion              // serve through this relay instead of picking a public one
@@ -389,6 +393,21 @@ func (a *app) startServer() {
 			a.status = "Server started"
 		})
 	}()
+}
+
+// serverSwitched runs when the Settings switch changes: it saves the setting
+// and starts or stops the server, unless a start or stop is already running.
+func (a *app) serverSwitched() {
+	if a.serverBusy {
+		return
+	}
+	if err := a.store.SetBool("server_enabled", a.serverEnabled); err != nil {
+		a.status = "Saving server setting failed: " + err.Error()
+	} else if a.serverEnabled {
+		a.startServer()
+	} else {
+		a.stopServer()
+	}
 }
 
 func (a *app) stopServer() {
