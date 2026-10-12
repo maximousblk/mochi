@@ -8,8 +8,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/ashwin-y/mochi/internal/admission"
@@ -88,6 +91,12 @@ func Run(args []string) error {
 	store, err := state.OpenState(statePath, legacyPath)
 	if err != nil {
 		return fmt.Errorf("opening state: %w", err)
+	}
+	// A GUI app has no console, so what it logs also goes to mochi.log beside
+	// the database. If the file cannot be opened, logging stays on stderr.
+	if f, err := os.OpenFile(filepath.Join(filepath.Dir(statePath), "mochi.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+		defer f.Close()
+		log.SetOutput(io.MultiWriter(os.Stderr, f))
 	}
 	a := &app{}
 	if err := a.load(store); err != nil {
@@ -339,6 +348,7 @@ func (a *app) startServer() {
 	a.status = "Starting server…"
 	go func() {
 		fail := func(err error) {
+			log.Printf("server failed to start: %v", err)
 			a.update(func() {
 				a.serverBusy = false
 				a.serverEnabled = false

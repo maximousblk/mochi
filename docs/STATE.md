@@ -32,6 +32,10 @@ planned, not implemented.
 
 ## Logs
 
+Mochi logs to `mochi.log`, beside `mochi.db`, as well as to stderr: server
+start failures, tray problems and the like. It is appended to and never
+rotated.
+
 WebDAV errors go to `webdav.log`, beside `mochi.db`. Start Mochi with
 `--verbose` to log every WebDAV request and its status. The share token is
 written as `<share>`.
