@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/BurntSushi/toml"
 )
@@ -20,14 +21,37 @@ const directIPKey = "direct-server"
 // this user's RustDesk settings, the switch the forward needs; if that fails,
 // the server side stays off. Other settings in the file are kept as they are.
 func (c *Connector) Listen() error {
-	dir, err := os.UserConfigDir()
+	path, err := settingsPath()
 	if err != nil {
-		return fmt.Errorf("finding RustDesk settings: %w", err)
+		return err
 	}
-	if err := enableDirectIP(filepath.Join(dir, "RustDesk", "config", "RustDesk2.toml")); err != nil {
+	if err := enableDirectIP(path); err != nil {
 		return err
 	}
 	return c.ServerSwitch.Listen()
+}
+
+// settingsPath is where RustDesk keeps this user's settings on this OS.
+func settingsPath() (string, error) {
+	switch runtime.GOOS {
+	case "darwin":
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("finding RustDesk settings: %w", err)
+		}
+		return filepath.Join(home, "Library", "Preferences", "com.carriez.RustDesk", "RustDesk2.toml"), nil
+	case "windows":
+		dir, err := os.UserConfigDir()
+		if err != nil {
+			return "", fmt.Errorf("finding RustDesk settings: %w", err)
+		}
+		return filepath.Join(dir, "RustDesk", "config", "RustDesk2.toml"), nil
+	}
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("finding RustDesk settings: %w", err)
+	}
+	return filepath.Join(dir, "rustdesk", "RustDesk2.toml"), nil
 }
 
 // enableDirectIP sets direct-server to "Y" under [options] in the RustDesk

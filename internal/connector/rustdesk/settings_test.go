@@ -70,14 +70,14 @@ func TestListenEnablesDirectIPAndServes(t *testing.T) {
 	if !c.ServerEnabled() {
 		t.Fatal("server side off after a successful Listen")
 	}
-	dir, err := os.UserConfigDir()
+	path, err := settingsPath()
 	if err != nil {
 		t.Fatal(err)
 	}
 	var got struct {
 		Options map[string]string `toml:"options"`
 	}
-	if _, err := toml.DecodeFile(filepath.Join(dir, "RustDesk", "config", "RustDesk2.toml"), &got); err != nil {
+	if _, err := toml.DecodeFile(path, &got); err != nil {
 		t.Fatal(err)
 	}
 	if got.Options[directIPKey] != "Y" {
@@ -89,15 +89,15 @@ func TestListenEnablesDirectIPAndServes(t *testing.T) {
 // off, so the switch never shows on while RustDesk refuses direct IP.
 func TestListenFailureLeavesServerOff(t *testing.T) {
 	testharness.IsolateUserDirs(t)
-	dir, err := os.UserConfigDir()
+	path, err := settingsPath()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(filepath.Dir(path)), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	// A file where RustDesk's settings directory should be.
-	if err := os.WriteFile(filepath.Join(dir, "RustDesk"), nil, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Dir(path), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	c := New(nil, admission.Dialing{})
