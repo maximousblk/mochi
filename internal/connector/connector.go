@@ -13,31 +13,47 @@ import (
 	"github.com/tailscale/tailcat"
 )
 
-// Connector represents a host-specific integration managed by Mochi.
-// Disable must be idempotent so cleanup can safely be retried.
+// Connector is a launcher. Its client side reaches one remote host at a time;
+// its server side is what this machine offers to other machines.
 //
-// Each connector also has a server side: the service this machine offers
-// other machines while the connector is on. The server reads it per
-// connection, so a change takes effect without restarting the server.
+// The server reads the server side per connection, so Listen and StopListening
+// take effect without restarting the server.
 type Connector interface {
+	// Name is the launcher's label, such as "SSH". Its lowercase form is part
+	// of the settings key that stores the server-side switch (SettingKey).
 	Name() string
+	// Icon is drawn on the launcher's tile.
 	Icon() *ui.SVG
+	// SetHosts gives the connector the current host list. Called at startup and
+	// whenever hosts change, for connectors that keep per-host state.
 	SetHosts([]state.Host)
+
+	// Enabled reports whether the client side is connected to host.
 	Enabled(state.Host) bool
+	// Connect starts the client side for host. If it fails, nothing is left
+	// running. Connecting an already connected host does nothing.
 	Connect(state.Host) error
+	// Disconnect stops the client side for host. It must be idempotent, so a
+	// failed cleanup can be retried, and a host that is not connected is fine.
 	Disconnect(state.Host) error
 
-	// ServerEnabled reports whether this machine offers the connector's service.
+	// ServerEnabled reports whether the switch for this machine's service is
+	// on. It says nothing about whether the service works; see Healthy.
 	ServerEnabled() bool
-	// Listen turns the service on, doing any setup it needs. If the setup
-	// fails the service stays off and the error says why.
+	// Listen turns the switch on. If it fails, the switch stays off and the
+	// error says why. It is called when the user turns the service on, and at
+	// startup for each service that was left on.
 	Listen() error
-	// StopListening turns the service off.
+	// StopListening turns the switch off.
 	StopListening() error
-	// Healthy reports whether the service is on and still able to serve. It
-	// is false while the service is off.
+	// Healthy reports whether the service is on and able to serve right now.
+	// It is false while the switch is off. A connector that depends on
+	// something outside Mochi checks it here, and the UI keeps the connector
+	// on but draws it yellow while it is false. It may dial, so it is called
+	// off the UI thread.
 	Healthy() bool
-	// ServerServe adds the service to sv. Called only while ServerEnabled is true.
+	// ServerServe adds this connector's service to sv. Called only while
+	// ServerEnabled is true.
 	ServerServe(sv *ServerServices)
 }
 

@@ -170,7 +170,7 @@ func launcherTile(c *ui.Context, name, tooltip string, icon *ui.SVG, enabled, wa
 	theme := c.Theme()
 	fill, text := theme.Accent, theme.AccentText
 	if warn {
-		fill, text = theme.Warning, ui.Hex("#1c1917")
+		fill = theme.Warning
 	}
 	tile := ui.Button(c, "").Label(name + " launcher").Tooltip(tooltip).Width(104).Height(92)
 	if enabled {
@@ -242,9 +242,6 @@ func (a *app) settingsView(c *ui.Context) {
 			on := lc.ServerEnabled()
 			warn := on && a.unhealthy[lc.Name()]
 			tip := "Let other machines use " + lc.Name()
-			if warn {
-				tip += " (on, but not working: check that the program is set up to accept it)"
-			}
 			if launcherTile(c, lc.Name(), tip, lc.Icon(), on, warn).Clicked() {
 				var err error
 				if on {
