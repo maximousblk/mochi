@@ -58,10 +58,9 @@ func TrustedKeys() ([]ed25519.PublicKey, error) {
 }
 
 // OpenDB opens the state database the way every Mochi process must. The GUI
-// writes the clients table constantly while each connector-ssh-proxy process
-// opens the same file, so a process waits up to 5 s for another's write lock
-// instead of failing at once with SQLITE_BUSY, and readers do not block the
-// writer (WAL). Each process uses one connection.
+// writes the clients table as connections arrive, so a writer waits up to 5 s
+// for another's write lock instead of failing at once with SQLITE_BUSY, and
+// readers do not block the writer (WAL). Each process uses one connection.
 func OpenDB(path string) (*sql.DB, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -117,43 +116,6 @@ func OpenState(path, legacyPath string) (*StateStore, error) {
 type Host struct {
 	Name    string
 	Address string
-}
-
-// ClientState is what a connector-ssh-proxy process needs from the database.
-type ClientState struct {
-	Identity Identity
-	Hosts    []Host
-	Certs    [][]byte
-}
-
-// LoadClient opens the state database of this user and reads ClientState from it.
-func LoadClient() (ClientState, error) {
-	databasePath, err := Path()
-	if err != nil {
-		return ClientState{}, err
-	}
-	legacyPath, err := LegacyPath()
-	if err != nil {
-		return ClientState{}, err
-	}
-	store, err := OpenState(databasePath, legacyPath)
-	if err != nil {
-		return ClientState{}, err
-	}
-	defer store.Close()
-	id, err := store.Identity()
-	if err != nil {
-		return ClientState{}, err
-	}
-	hosts, err := store.Hosts()
-	if err != nil {
-		return ClientState{}, err
-	}
-	certs, err := store.Certs()
-	if err != nil {
-		return ClientState{}, err
-	}
-	return ClientState{id, hosts, certs}, nil
 }
 
 func (s *StateStore) init() error {

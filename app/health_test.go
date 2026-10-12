@@ -6,23 +6,23 @@ import (
 	"github.com/ashwin-y/mochi/internal/connector"
 )
 
-// sickConnector is listening, but reports it cannot serve.
+// sickConnector reports whether it can serve, as the test sets it.
 type sickConnector struct {
 	toggleConnector
 	healthy bool
 }
 
-func (c *sickConnector) Healthy() bool { return c.ServerEnabled() && c.healthy }
+func (c *sickConnector) Healthy() bool { return c.healthy }
 
-// A connector that is listening but not healthy stays on and is drawn yellow,
-// not in the accent color; once it is healthy again it returns to the accent.
+// A launcher that is on but not healthy stays on and is drawn yellow, not in the
+// accent color; once it is healthy again it returns to the accent.
 func TestUIUnhealthyServerTileIsYellow(t *testing.T) {
-	sick := &sickConnector{toggleConnector: toggleConnector{name: "Sick", on: map[string]bool{}}}
+	sick := &sickConnector{toggleConnector: toggleConnector{name: "Sick"}}
 	var _ connector.Connector = sick
 	e := newUI(t, false, nil, sick)
-	if err := sick.Listen(); err != nil {
-		t.Fatal(err)
-	}
+	// The switch is on, as Listen would have left it. The test sets the app's
+	// record directly: a click would start a health check that needs a window.
+	e.app.serving[sick.Name()] = true
 	e.openSettings()
 	revealInView(e.t, e.tt, "Sick launcher")
 	tile, ok := e.tt.Find("Sick launcher")
@@ -36,8 +36,8 @@ func TestUIUnhealthyServerTileIsYellow(t *testing.T) {
 	if x, y := at(); !sameColor(e.pixel(x, y), e.theme.Warning) {
 		t.Fatalf("an unhealthy listening tile is %v, want warning %v", e.pixel(x, y), e.theme.Warning)
 	}
-	if !sick.ServerEnabled() {
-		t.Fatal("the unhealthy connector was switched off")
+	if !e.app.serving[sick.Name()] {
+		t.Fatal("the unhealthy launcher was switched off")
 	}
 
 	sick.healthy = true

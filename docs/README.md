@@ -12,9 +12,8 @@ and rough edges.
 - Embedded Tailcat server, with a per-machine identity and admission control.
 - Approve clients with certificates, or from the pending list.
 - Per-host launchers:
-  - **SSH**: a managed SSH config block for the host ([SSH](SSH.md)).
-  - **Files**: mount a host's files as WebDAV on localhost ([Files](FILES.md)).
-  - **WebDAV**: mount a Mochi host's WebDAV service ([WebDAV](WEBDAV.md)).
+  - **SSH**: a tunnel to the host's SSH server, and the `ssh` command for it ([SSH](SSH.md)).
+  - **WebDAV**: mount a Mochi host's files in Explorer or Finder ([WebDAV](WEBDAV.md)).
   - **Send text**: send typed text to a host's TCP port.
   - **RustDesk**: forward a host's RustDesk direct-IP port ([RustDesk](RUSTDESK.md)).
 - Startup settings from an embedded `bootstrap.json` ([Bootstrap](BOOTSTRAP.md)).
@@ -46,7 +45,7 @@ Then:
 - [Admission](ADMISSION.md): who may connect to this machine.
 - [State](STATE.md): where data lives, and what is stored.
 - [Bootstrap](BOOTSTRAP.md): the embedded startup configuration.
-- [SSH](SSH.md), [Files](FILES.md), [WebDAV](WEBDAV.md), [RustDesk](RUSTDESK.md): launchers and the services they use.
+- [SSH](SSH.md), [WebDAV](WEBDAV.md), [RustDesk](RUSTDESK.md): launchers and the services they use.
 
 ## Known limits
 

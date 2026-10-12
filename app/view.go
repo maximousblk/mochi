@@ -8,7 +8,6 @@ import (
 	"github.com/ashwin-y/mochi/internal/state"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
-	"github.com/tailscale/tailcat"
 )
 
 func (a *app) view(c *ui.Context) {
@@ -111,7 +110,7 @@ func (a *app) hostView(c *ui.Context) {
 			a.confirmRemove = true
 		}
 	})
-	if ui.AlertDialog(c, &a.confirmRemove, "Remove "+host.Name+"?", "This removes the host and its SSH config entry.", "No", "Yes") == 1 {
+	if ui.AlertDialog(c, &a.confirmRemove, "Remove "+host.Name+"?", "This removes the host and closes its connections.", "No", "Yes") == 1 {
 		a.confirmRemove = false
 		for i := range a.hosts {
 			if a.hosts[i].Address == a.selectedHost {
@@ -137,24 +136,9 @@ func (a *app) hostView(c *ui.Context) {
 	ui.Text(c, "Launchers").FontSize(18).Bold()
 	ui.Row(c).Gap(12).Children(func() {
 		for _, lc := range a.connectors {
-			enabled := lc.Enabled(*host)
-			if launcherTile(c, lc.Name(), "Toggle "+lc.Name()+" connector", lc.Icon(), enabled, false).Clicked() {
-				var err error
-				if enabled {
-					err = lc.Disconnect(*host)
-				} else {
-					err = lc.Connect(*host)
-				}
-				if err != nil {
-					a.status = lc.Name() + " connector failed: " + err.Error()
-				} else if u, ok := lc.(interface{ URL(state.Host) string }); ok && lc.Enabled(*host) {
-					c.WriteClipboard(u.URL(*host))
-					a.status = lc.Name() + " address copied: " + u.URL(*host)
-				} else if lc.Enabled(*host) {
-					a.status = lc.Name() + " enabled"
-				} else {
-					a.status = lc.Name() + " disabled"
-				}
+			_, connected := a.connections[host.Address][lc.Name()]
+			if launcherTile(c, lc.Name(), "Toggle "+lc.Name()+" connector", lc.Icon(), connected, false).Clicked() {
+				a.toggleConnection(*host, lc)
 			}
 		}
 		if launcherTile(c, "Send text", "Send text to this host", textSenderIcon, false, false).Clicked() {
@@ -222,7 +206,7 @@ func flatButton(c *ui.Context, tooltip string, content func()) ui.Element {
 // nodeIDFromAddress returns the Tailcat server node key that the address
 // encodes, or "" if the address does not parse.
 func nodeIDFromAddress(address string) string {
-	info, err := tailcat.ParseAddr(tailcat.Addr(address))
+	info, err := connector.ParseHost(address)
 	if err != nil {
 		return ""
 	}
@@ -239,22 +223,11 @@ func (a *app) settingsView(c *ui.Context) {
 	ui.Text(c, "Connectors").FontSize(18).Bold()
 	ui.Row(c).Gap(12).Children(func() {
 		for _, lc := range a.connectors {
-			on := lc.ServerEnabled()
+			on := a.serving[lc.Name()]
 			warn := on && a.unhealthy[lc.Name()]
 			tip := "Let other machines use " + lc.Name()
 			if launcherTile(c, lc.Name(), tip, lc.Icon(), on, warn).Clicked() {
-				var err error
-				if on {
-					err = lc.StopListening()
-				} else {
-					err = lc.Listen()
-				}
-				if err != nil {
-					a.status = lc.Name() + " server not changed: " + err.Error()
-				} else if err := a.store.SetBool(connector.SettingKey(lc), !on); err != nil {
-					a.status = "Saving " + lc.Name() + " setting failed: " + err.Error()
-				}
-				a.checkHealth()
+				a.toggleServing(lc)
 			}
 		}
 	})

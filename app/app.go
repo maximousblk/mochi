@@ -17,7 +17,6 @@ import (
 
 	"github.com/ashwin-y/mochi/internal/admission"
 	"github.com/ashwin-y/mochi/internal/connector"
-	"github.com/ashwin-y/mochi/internal/connector/files"
 	"github.com/ashwin-y/mochi/internal/connector/rustdesk"
 	"github.com/ashwin-y/mochi/internal/connector/ssh"
 	"github.com/ashwin-y/mochi/internal/connector/webdav"
@@ -56,17 +55,24 @@ type app struct {
 	store         *state.StateStore
 	lastTrayClick time.Time // when the tray icon was last clicked, for double clicks
 	connectors    []connector.Connector
+	ports         *connector.Ports
 	window        *mygo.Window
 	tray          *mygo.Tray
 	quitting      bool
+
+	// serving is each launcher's server-side switch, by name, as the app last
+	// set it. connections holds the clients open now, by host address and then
+	// by launcher name. Clients are not saved: they exist only while open.
+	serving     map[string]bool
+	connections map[string]map[string]connector.Client
 
 	// pageScroll is where the content scrolls, so the app can bring it back to
 	// the top, as the Settings page needs after a switch is flipped.
 	pageScroll ui.ScrollState
 
-	// unhealthy names the connectors whose server side is on but not working,
-	// as of the last check. Healthy may dial, so the view reads this instead
-	// of calling it on every frame.
+	// unhealthy names the launchers that are not healthy, as of the last check.
+	// Healthy may dial, so the view reads this instead of calling it on every
+	// frame. The view draws a launcher yellow only while its switch is on.
 	unhealthy map[string]bool
 
 	// Seams for tests; all nil in the real app.
@@ -74,6 +80,7 @@ type app struct {
 	relay      *tailcfg.DERPRegion              // serve through this relay instead of picking a public one
 	openPath   func(string) error               // opens a folder; mygo.Shell.OpenPath when nil
 	serveExtra func(port uint16) func(net.Conn) // more ports for the server to serve
+	copyText   func(string)                     // copies text; mygo's clipboard when nil
 }
 
 // Run starts the app and blocks until it exits. args are the command-line
@@ -144,13 +151,14 @@ func Run(args []string) error {
 			a.startServer()
 		}
 		go a.watchHealth()
+		go a.watchIdle()
 	})
 	mygo.App.OnWindowAllClosed(func() {})
 	return mygo.App.Run()
 }
 
 // load reads everything the app starts from out of store: hosts, the server
-// setting, this machine's identity, the trusted keys and the connectors.
+// setting, this machine's identity, the trusted keys and the launchers.
 func (a *app) load(store *state.StateStore) (err error) {
 	a.store = store
 	if a.hosts, err = store.Hosts(); err != nil {
@@ -169,47 +177,25 @@ func (a *app) load(store *state.StateStore) (err error) {
 		certs, _ := store.Certs()
 		return certs
 	}}
-	sshConfigPath, err := store.StringSetting("ssh_config_path")
-	if err != nil || sshConfigPath == "" {
-		if sshConfigPath, err = ssh.DefaultConfigPath(); err != nil {
-			return err
-		}
-	}
-	a.connectors = newConnectors(sshConfigPath, a.dialing)
-	for _, c := range a.connectors {
-		c.SetHosts(a.hosts)
-	}
-	// The WebDAV switch used to control the files service, which is now the
-	// Files connector's switch. Move the stored value across, and drop the old
-	// row, so the new WebDAV server does not inherit it and start on.
-	if on, err := store.BoolSetting("connector_server:webdav"); err == nil {
-		if err := store.SetBool("connector_server:files", on); err != nil {
-			return fmt.Errorf("moving the files setting: %w", err)
-		}
-		if err := store.DeleteSetting("connector_server:webdav"); err != nil {
-			return fmt.Errorf("moving the files setting: %w", err)
-		}
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("loading the WebDAV setting: %w", err)
-	}
+	a.ports = connector.NewPorts()
+	a.serving = map[string]bool{}
+	a.connections = map[string]map[string]connector.Client{}
+	a.connectors = newConnectors(a.ports, a.identity.Seed(), a.copyToClipboard, a.dialing)
 	for _, c := range a.connectors {
 		on, err := store.BoolSetting(connector.SettingKey(c))
 		switch {
 		case err == nil && on:
 			if err := c.Listen(); err != nil {
 				a.status = c.Name() + " server not started: " + err.Error()
+			} else {
+				a.serving[c.Name()] = true
 			}
 		case err == nil:
-			if err := c.StopListening(); err != nil {
+			if err := c.Stop(); err != nil {
 				a.status = c.Name() + " server not stopped: " + err.Error()
 			}
 		case !errors.Is(err, sql.ErrNoRows):
 			return fmt.Errorf("loading %s server setting: %w", c.Name(), err)
-		}
-	}
-	if sshConnector, ok := a.connectors[0].(*ssh.Connector); ok {
-		if err := sshConnector.Refresh(a.hosts); err != nil {
-			log.Printf("checking SSH config: %v", err)
 		}
 	}
 	if len(a.hosts) > 0 {
@@ -219,12 +205,11 @@ func (a *app) load(store *state.StateStore) (err error) {
 }
 
 // newConnectors returns the launchers in the order the UI shows them.
-func newConnectors(sshConfigPath string, dialing admission.Dialing) []connector.Connector {
+func newConnectors(ports *connector.Ports, seed []byte, copyText func(string), dialing admission.Dialing) []connector.Connector {
 	return []connector.Connector{
-		ssh.New(sshConfigPath, sshIcon),
-		files.New(folderIcon, dialing),
-		webdav.New(webdavIcon, dialing),
-		rustdesk.New(rustdeskIcon, dialing),
+		ssh.New(ports, seed, copyText, sshIcon, dialing),
+		webdav.New(ports, copyText, webdavIcon, dialing),
+		rustdesk.New(ports, rustdeskIcon, dialing),
 	}
 }
 
@@ -238,16 +223,26 @@ func (a *app) update(fn func()) {
 	a.window.Update(fn)
 }
 
-// healthCheckInterval is how often the connectors' health is checked.
+// copyToClipboard puts text on the clipboard.
+func (a *app) copyToClipboard(text string) {
+	if a.copyText != nil {
+		a.copyText(text)
+		return
+	}
+	mygo.Clipboard.WriteText(text)
+}
+
+// healthCheckInterval is how often the launchers' health is checked.
 const healthCheckInterval = 5 * time.Second
 
-// unhealthyNow asks each connector whose server side is on whether it is
-// healthy, and returns the names of those that are not. It may dial, so it
-// runs off the UI thread.
+// unhealthyNow asks each launcher whether it is healthy, and returns the names
+// of those that are not. A launcher that is off is not healthy, so the view
+// draws one yellow only while its switch is on. Healthy may dial, so this runs
+// off the UI thread.
 func (a *app) unhealthyNow() map[string]bool {
 	bad := map[string]bool{}
 	for _, c := range a.connectors {
-		if c.ServerEnabled() && !c.Healthy() {
+		if !c.Healthy() {
 			bad[c.Name()] = true
 		}
 	}
@@ -262,7 +257,7 @@ func (a *app) checkHealth() {
 	}()
 }
 
-// watchHealth checks the connectors' health now and then, for as long as the
+// watchHealth checks the launchers' health now and then, for as long as the
 // app runs.
 func (a *app) watchHealth() {
 	for {
@@ -270,6 +265,26 @@ func (a *app) watchHealth() {
 		a.update(func() { a.unhealthy = bad })
 		time.Sleep(healthCheckInterval)
 	}
+}
+
+// toggleServing turns a launcher's server side on or off, and saves its switch.
+func (a *app) toggleServing(lc connector.Connector) {
+	on := a.serving[lc.Name()]
+	var err error
+	if on {
+		err = lc.Stop()
+	} else {
+		err = lc.Listen()
+	}
+	if err != nil {
+		a.status = lc.Name() + " server not changed: " + err.Error()
+	} else {
+		a.serving[lc.Name()] = !on
+		if err := a.store.SetBool(connector.SettingKey(lc), !on); err != nil {
+			a.status = "Saving " + lc.Name() + " setting failed: " + err.Error()
+		}
+	}
+	a.checkHealth()
 }
 
 func (a *app) showWindow() {
@@ -301,6 +316,7 @@ func (a *app) trayClicked() {
 
 func (a *app) exit() {
 	a.quitting = true
+	a.disconnectAll()
 	if a.stopGate != nil {
 		a.stopGate()
 	}
@@ -341,13 +357,7 @@ func (a *app) removeHost(index int) error {
 		return nil
 	}
 	host := a.hosts[index]
-	var cleanupErrors []error
-	for _, c := range a.connectors {
-		if err := c.Disconnect(host); err != nil {
-			cleanupErrors = append(cleanupErrors, fmt.Errorf("%s: %w", c.Name(), err))
-		}
-	}
-	if err := errors.Join(cleanupErrors...); err != nil {
+	if err := a.disconnectHost(host.Address); err != nil {
 		return err
 	}
 	if err := a.store.DeleteHost(host.Address); err != nil {
@@ -358,25 +368,6 @@ func (a *app) removeHost(index int) error {
 		a.selectedHost = ""
 	}
 	a.status = "Host removed"
-	return nil
-}
-
-// serverHandler returns the handler for a Tailcat service port, or nil if no
-// enabled connector offers it. It is looked up per connection, so switching a
-// connector takes effect without restarting the server.
-func (a *app) serverHandler(s *tailcat.Server, port uint16) func(net.Conn) {
-	sv := &connector.ServerServices{Serve: map[uint16]func(net.Conn){}}
-	for _, c := range a.connectors {
-		if c.ServerEnabled() {
-			c.ServerServe(sv)
-		}
-	}
-	if port == 22 && (sv.Shell || sv.Files != nil) {
-		return s.SSHConnHandler(tailcat.SSHOptions{Shell: sv.Shell, Files: sv.Files})
-	}
-	if h, ok := sv.Serve[port]; ok {
-		return h
-	}
 	return nil
 }
 
@@ -423,7 +414,7 @@ func (a *app) startServer() {
 					return h
 				}
 			}
-			return a.serverHandler(s, port)
+			return a.ports.Handler(port)
 		})
 		if err := s.Start(); err != nil {
 			fail(err)

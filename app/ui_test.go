@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ashwin-y/mochi/internal/admission"
 	"github.com/ashwin-y/mochi/internal/connector"
@@ -22,41 +23,29 @@ const (
 	uiHeight = 700
 )
 
-// toggleConnector is a connector whose enabled state the test controls.
+// toggleConnector is a launcher whose connections the test controls. Connect
+// fails with enableErr, or hands back a fakeClient that records its disconnect.
 type toggleConnector struct {
 	name      string
-	on        map[string]bool
 	enableErr error
-	enables   int
-	disables  int
-	url       string
-	connector.ServerSwitch
+	connects  int
+	clients   []*fakeClient
 }
 
-func (c *toggleConnector) ServerServe(*connector.ServerServices) {}
-
-func (c *toggleConnector) Name() string              { return c.name }
-func (c *toggleConnector) Icon() *ui.SVG             { return webdavIcon }
-func (c *toggleConnector) SetHosts([]state.Host)     {}
-func (c *toggleConnector) Enabled(h state.Host) bool { return c.on[h.Address] }
-func (c *toggleConnector) Connect(h state.Host) error {
-	c.enables++
+func (c *toggleConnector) Name() string  { return c.name }
+func (c *toggleConnector) Icon() *ui.SVG { return webdavIcon }
+func (c *toggleConnector) Connect(state.Host) (connector.Client, error) {
+	c.connects++
 	if c.enableErr != nil {
-		return c.enableErr
+		return nil, c.enableErr
 	}
-	c.on[h.Address] = true
-	return nil
+	fc := &fakeClient{last: time.Now()}
+	c.clients = append(c.clients, fc)
+	return fc, nil
 }
-func (c *toggleConnector) Disconnect(h state.Host) error {
-	c.disables++
-	delete(c.on, h.Address)
-	return nil
-}
-
-// urlConnector also reports an address to copy, as WebDAV and RustDesk do.
-type urlConnector struct{ toggleConnector }
-
-func (c *urlConnector) URL(state.Host) string { return c.url }
+func (c *toggleConnector) Listen() error { return nil }
+func (c *toggleConnector) Stop() error   { return nil }
+func (c *toggleConnector) Healthy() bool { return true }
 
 // uiEnv is the app under test with its state in a temporary database, and the
 // tester that drives its view.
@@ -100,9 +89,12 @@ func newUI(t *testing.T, withGate bool, hosts []state.Host, connectors ...connec
 		}
 	}
 	a := &app{
-		hosts:    hosts,
-		store:    store,
-		identity: id,
+		hosts:       hosts,
+		store:       store,
+		identity:    id,
+		ports:       connector.NewPorts(),
+		serving:     map[string]bool{},
+		connections: map[string]map[string]connector.Client{},
 		dialing: admission.Dialing{Key: id.NodeKey(state.RoleClient), Certs: func() [][]byte {
 			certs, _ := store.Certs()
 			return certs
@@ -341,11 +333,10 @@ func TestUICopyButtons(t *testing.T) {
 
 func TestUILaunchers(t *testing.T) {
 	h := state.Host{Name: "lab", Address: testAddress(t)}
-	plain := &toggleConnector{name: "Plain", on: map[string]bool{}}
-	withURL := &urlConnector{toggleConnector{name: "Share", on: map[string]bool{}, url: `\\127.0.0.1@4000\DavWWWRoot\tok`}}
-	e := newUI(t, false, []state.Host{h}, plain, withURL)
+	plain := &toggleConnector{name: "Plain"}
+	e := newUI(t, false, []state.Host{h}, plain)
 	e.click("lab")
-	e.want("Plain", "Share", "Send text")
+	e.want("Plain", "Send text")
 
 	tile, ok := e.tt.Find("Plain launcher")
 	if !ok {
@@ -356,24 +347,22 @@ func TestUILaunchers(t *testing.T) {
 		t.Fatal("a disabled launcher is drawn in the accent color")
 	}
 
-	// Enabling: the connector is called, the tile turns accent-filled.
+	// Connecting: the launcher is called, and its tile turns accent-filled.
 	e.click("Plain launcher")
-	if plain.enables != 1 || !plain.on[h.Address] {
-		t.Fatalf("enables=%d on=%v", plain.enables, plain.on)
+	if plain.connects != 1 || len(e.app.connections[h.Address]) != 1 {
+		t.Fatalf("connects=%d connections=%v", plain.connects, e.app.connections)
 	}
-	if e.status() != "Plain enabled" {
+	if e.status() != "Plain connected" {
 		t.Fatalf("status = %q", e.status())
 	}
 	if !sameColor(probe(), e.theme.Accent) {
 		t.Fatalf("an enabled launcher is %v, want the accent color %v", probe(), e.theme.Accent)
 	}
-	// Its text is inverted: pixels of the label differ from the disabled ones.
-	// (Checked via the tile's own color, which is what the label is drawn on.)
 
-	// Disabling returns it to the plain look.
+	// Disconnecting disconnects the client, and returns the tile to plain.
 	e.click("Plain launcher")
-	if plain.disables != 1 || plain.on[h.Address] || e.status() != "Plain disabled" {
-		t.Fatalf("disables=%d on=%v status=%q", plain.disables, plain.on, e.status())
+	if got := plain.clients[0].disconnects; got != 1 || len(e.app.connections) != 0 || e.status() != "Plain disconnected" {
+		t.Fatalf("disconnects=%d connections=%v status=%q", got, e.app.connections, e.status())
 	}
 	if sameColor(probe(), e.theme.Accent) {
 		t.Fatal("a disabled launcher stayed accent-filled")
@@ -386,42 +375,34 @@ func TestUILaunchers(t *testing.T) {
 		t.Fatalf("status = %q", e.status())
 	}
 	if sameColor(probe(), e.theme.Accent) {
-		t.Fatal("a failed enable left the tile accent-filled")
-	}
-
-	// A connector with an address copies it, and says so.
-	e.click("Share launcher")
-	if got := e.tt.Clipboard(); got != withURL.url {
-		t.Fatalf("clipboard = %q, want the share address", got)
-	}
-	if !strings.HasPrefix(e.status(), "Share address copied: ") {
-		t.Fatalf("status = %q", e.status())
+		t.Fatal("a failed connect left the tile accent-filled")
 	}
 }
 
 func TestUIRemoveHost(t *testing.T) {
 	h := state.Host{Name: "lab", Address: testAddress(t)}
 	other := state.Host{Name: "keep", Address: testAddress(t)}
-	c := &toggleConnector{name: "Plain", on: map[string]bool{}}
+	c := &toggleConnector{name: "Plain"}
 	e := newUI(t, false, []state.Host{h, other}, c)
 	e.click("lab")
+	e.click("Plain launcher")
 
 	e.click("Remove host")
-	e.want("Remove lab?", "This removes the host and its SSH config entry.", "Yes", "No")
+	e.want("Remove lab?", "This removes the host and closes its connections.", "Yes", "No")
 
 	// No keeps everything.
 	e.click("No")
 	e.wantNot("Remove lab?")
-	if len(e.app.hosts) != 2 || c.disables != 0 {
-		t.Fatalf("hosts=%d disables=%d after No", len(e.app.hosts), c.disables)
+	if len(e.app.hosts) != 2 || c.clients[0].disconnects != 0 {
+		t.Fatalf("hosts=%d disconnects=%d after No", len(e.app.hosts), c.clients[0].disconnects)
 	}
 
-	// Yes disables the connectors, deletes the host from memory and the store,
+	// Yes disconnects the host's clients, deletes the host from memory and the store,
 	// and falls back to the empty page.
 	e.click("Remove host")
 	e.click("Yes")
-	if c.disables != 1 {
-		t.Fatalf("connector disabled %d times, want once", c.disables)
+	if c.clients[0].disconnects != 1 {
+		t.Fatalf("client disconnected %d times, want once", c.clients[0].disconnects)
 	}
 	if len(e.app.hosts) != 1 || e.app.hosts[0] != other {
 		t.Fatalf("hosts = %+v", e.app.hosts)

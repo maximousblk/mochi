@@ -9,14 +9,15 @@ macOS:   ~/Library/Application Support/mochi/mochi.db
 Windows: %AppData%\mochi\mochi.db
 ```
 
-The database runs in WAL mode. Every process that opens it uses a busy timeout,
-so the app and `connector-ssh-proxy` can share it.
+The database runs in WAL mode. Writers wait on a busy timeout rather than
+failing at once.
 
 ## What is stored
 
 - **Hosts:** name and Tailcat address.
-- **Settings:** the Tailcat server switch, each connector's server switch and
-  the SSH config path.
+- **Settings:** the Tailcat server switch and each launcher's server switch.
+- **Connections** are not stored. A launcher's connection to a host exists only
+  while Mochi runs, and is closed when it has been idle for six hours.
 - **Identity:** the machine's Ed25519 seed. Its public half is the machine key
   shown in Settings. See [Admission](ADMISSION.md).
 - **Server:** the server's node key, pre-shared key and relay region. They
@@ -37,13 +38,10 @@ start failures, tray problems and the like. It is appended to and never
 rotated.
 
 WebDAV errors go to `webdav.log`, beside `mochi.db`. Start Mochi with
-`--verbose` to log every WebDAV request and its status. The share token is
-written as `<share>`.
+`--verbose` to log every WebDAV request and its status.
 
 ## Upgrades
 
 - Installs from before identities existed had a random client key that cannot
   become a seed. They start a new identity, and hosts that knew the old client
   key must approve the new one.
-- The old WebDAV server switch controlled the Files service. On upgrade, its
-  stored value moves to the Files switch, and the WebDAV switch starts off.

@@ -36,23 +36,23 @@ local DERP relay, so it needs loopback networking.
 
 ## Code map
 
-The root `main.go` only dispatches: `issue` and `connector-ssh-proxy` go to
-`cmd/`, and everything else starts the window in `app/`.
+The root `main.go` only dispatches: `issue` goes to `cmd/`, and everything else
+starts the window in `app/`.
 
 | Path | Purpose |
 | --- | --- |
 | `main.go` | Dispatch between the CLI subcommands and the app |
-| `cmd/` | CLI subcommands: `Issue` and `SSHProxy` |
+| `cmd/` | CLI subcommands: `Issue` |
 | `app/` | The window: lifecycle, screens, tray, Send-text popup, approvals list, embedded icons and fonts |
 | `internal/state/` | SQLite state, identity seed, bootstrap trust list, state paths |
 | `internal/admission/` | Who may connect: gate, probation, certificates, dialing |
 | `internal/server/` | Relay region selection for the embedded Tailcat server |
-| `internal/share/` | Loopback share helpers shared by Files and WebDAV |
-| `internal/connector/` | The `Connector` interface and the server-side switches |
-| `internal/connector/ssh/` | SSH launcher, managed SSH config block, `connector-ssh-proxy` |
-| `internal/connector/files/` | Files launcher: WebDAV on loopback, translated to SFTP |
-| `internal/connector/webdav/` | WebDAV launcher: proxies a Mochi host's WebDAV |
-| `internal/connector/rustdesk/` | RustDesk direct-IP forward |
+| `internal/sshserver/` | The in-process SSH server: sessions, PTY, sftp subsystem |
+| `internal/share/` | WebDAV helpers: file manager hand-off, request logging |
+| `internal/connector/` | The `Connector` and `Client` interfaces, the Tailcat port registry, and the client tunnel |
+| `internal/connector/ssh/` | SSH launcher: serves `sshserver` on port 22022, and tunnels to a host's SSH |
+| `internal/connector/webdav/` | WebDAV launcher: serves the home volume, and mounts a host's share through a tunnel |
+| `internal/connector/rustdesk/` | RustDesk launcher: direct-IP forward, and the RustDesk client on a tunnel |
 | `internal/connector/textsender/` | Send-text protocol |
 | `mygo.json` | MyGo app metadata; its icon is `app/resources/icon.png` |
 

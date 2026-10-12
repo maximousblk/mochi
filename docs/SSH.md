@@ -1,46 +1,58 @@
 # SSH
 
-The SSH launcher adds a host to your SSH config, so `ssh <name>` connects to it
-over Tailcat.
+The SSH launcher reaches a Mochi host's SSH server through Tailcat, so `ssh`,
+`scp` and `sftp` work with the host as they do with any SSH server. Mochi does
+not change your SSH config.
 
 ## Server side
 
-With the SSH switch on, the server serves SSH shell sessions on port 22, through
-Tailcat's built-in SSH service. It is on by default.
+With the SSH switch on, Mochi runs an SSH server in process, on Tailcat port
+22022. The port is not 22, so it does not clash with an OpenSSH server on the
+same machine. The switch is off by default.
 
-## Launcher
+The host key is derived from the machine's identity, so it stays the same for as
+long as the identity does, and no key file is written.
 
-Each host has an SSH launcher. It writes a marked block to your native SSH
-config, and other entries in that file are left alone. The block has this shape:
+### Accounts
+
+The SSH username selects the account. A username that names the account Mochi
+runs as gets a session. Any other username is refused at authentication. There
+are no SSH passwords or keys: the Tailcat tunnel has already checked the client
+(see [Admission](ADMISSION.md)).
+
+A session is one of these:
+
+- a login shell, when the client asks for none (PowerShell on Windows);
+- the command the client gave, run through the account's shell;
+- with a PTY, when the client asks for one (ConPTY on Windows);
+- the `sftp` subsystem, which serves the whole filesystem with the account's
+  home directory as the working directory. `scp` and `sftp` both use it.
+
+Mochi runs as one account and does not switch to another, which would need root.
+Port forwarding and agent forwarding are not offered.
+
+## Client side
+
+Turning on a host's SSH launcher tunnels to the host's SSH server through a
+loopback port on this machine, and copies the command that uses it:
 
 ```text
-# BEGIN MOCHI MANAGED <id>
-Host <name>
-    HostName <tailcat-address>
-    ProxyCommand "<path to mochi>" connector-ssh-proxy <tailcat-address> %p
-# END MOCHI MANAGED <id>
+ssh -p <port> -o HostKeyAlias=mochi-node-<node key> 127.0.0.1
 ```
 
-`<id>` is the first 16 hex characters of the SHA-256 of the Tailcat address.
-The block runs the current Mochi executable by its absolute path, and `%p` is
-the port OpenSSH asks for.
-`connector-ssh-proxy` runs headlessly. It relays stdin and stdout to the host's
-Tailcat TCP port and writes diagnostics only to stderr.
+Put your user name on the host before `127.0.0.1`, for example
+`ssh -p 40123 -o HostKeyAlias=mochi-node-… alice@127.0.0.1`. For `scp` and
+`sftp`, use the same options; they take the port as `-P`.
 
-## Why the address is restored
+`HostKeyAlias` names the host by its node key, so OpenSSH's `known_hosts` file
+records the host under a name that does not change. The loopback port changes each
+time you connect, so the address alone would not identify the host.
 
-Windows OpenSSH lowercases `%h` before it runs `ProxyCommand`. Mochi writes the
-exact stored Tailcat address into the block. For older managed entries, it
-restores the address's case from the state database.
+Connecting does not check the host first. A host that does not approve this
+machine refuses the tunnel, and the `ssh` command then fails to connect.
 
-## Authentication
+## Disconnecting
 
-`connector-ssh-proxy` uses the client node key derived from the machine's
-identity, and presents the stored certificates to the host. A host that does not
-approve the client fails the connection and states the reason. See
-[Admission](ADMISSION.md).
-
-## Removing a host
-
-Removing a host disables its launchers first, which removes its SSH block. If
-any cleanup fails, Mochi keeps the host so that cleanup can be retried.
+Clicking the SSH launcher again, removing the host, or quitting Mochi closes the
+tunnel. Mochi also closes it once six hours pass without data moving through it.
+A connection that is still open counts as in use.

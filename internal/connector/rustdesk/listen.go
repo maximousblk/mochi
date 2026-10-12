@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net"
 	"time"
+
+	"github.com/ashwin-y/mochi/internal/connector"
 )
 
 // probeTimeout bounds one probe of the local direct-IP port. It is a loopback
@@ -25,6 +27,28 @@ const probeTimeout = 2 * time.Second
 // Listen does not probe: the server side can be turned on first, and Healthy
 // reports whether RustDesk is accepting yet.
 
+// Listen serves this machine's direct-IP port on Tailcat, forwarding each
+// connection to RustDesk on this machine. Direct IP access must be on in
+// RustDesk's own settings for the forward to work.
+func (c *Connector) Listen() error {
+	c.ports.Register(DirectPort, forwardTo(fmt.Sprintf("127.0.0.1:%d", DirectPort)))
+	return nil
+}
+
+// Stop stops serving the direct-IP port.
+func (c *Connector) Stop() error {
+	c.ports.Unregister(DirectPort)
+	return nil
+}
+
+// Healthy reports whether the server side is on and RustDesk accepts direct IP
+// connections on this machine. It is false while the user has not turned
+// "Enable direct IP access" on in RustDesk (Settings > Security), or has turned
+// it off again. It dials, so callers poll it off the UI thread.
+func (c *Connector) Healthy() bool {
+	return c.ports.Registered(DirectPort) && probe() == nil
+}
+
 // probe reports whether something accepts connections on RustDesk's default
 // direct-IP port on this machine.
 func probe() error {
@@ -37,10 +61,15 @@ func probe() error {
 	return nil
 }
 
-// Healthy reports whether the server side is on and RustDesk accepts direct IP
-// connections on this machine. It is false while the user has not turned
-// "Enable direct IP access" on in RustDesk (Settings > Security), or has turned
-// it off again. It dials, so callers poll it off the UI thread.
-func (c *Connector) Healthy() bool {
-	return c.ServerEnabled() && probe() == nil
+// forwardTo returns a handler that pipes each connection to the local TCP
+// address addr, and closes both sides when either one ends.
+func forwardTo(addr string) func(net.Conn) {
+	return func(remote net.Conn) {
+		local, err := net.DialTimeout("tcp", addr, dialTimeout)
+		if err != nil {
+			remote.Close()
+			return
+		}
+		connector.Splice(remote, local, nil)
+	}
 }

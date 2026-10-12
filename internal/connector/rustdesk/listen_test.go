@@ -6,12 +6,12 @@ import (
 	"testing"
 
 	"github.com/ashwin-y/mochi/internal/admission"
+	"github.com/ashwin-y/mochi/internal/connector"
 )
 
-// The server side turns on whether or not RustDesk accepts direct IP yet. It
-// is healthy only while something accepts on RustDesk's direct-IP port, so it
-// turns unhealthy, still on, when direct IP is off, and healthy again when it
-// is turned on.
+// The server side is on from Listen until Stop. It is healthy only while
+// something accepts on RustDesk's direct-IP port, so it turns unhealthy, still
+// on, when direct IP is off, and healthy again when it is turned on.
 func TestHealthyFollowsDirectIPPort(t *testing.T) {
 	addr := fmt.Sprintf("127.0.0.1:%d", DirectPort)
 	ln, err := net.Listen("tcp", addr)
@@ -20,15 +20,16 @@ func TestHealthyFollowsDirectIPPort(t *testing.T) {
 	}
 	ln.Close() // RustDesk with direct IP off: nothing listens
 
-	c := New(nil, admission.Dialing{})
+	ports := connector.NewPorts()
+	c := New(ports, nil, admission.Dialing{})
 	if c.Healthy() {
 		t.Fatal("healthy while the server side is off")
 	}
 	if err := c.Listen(); err != nil {
 		t.Fatalf("Listen with direct IP off: %v", err)
 	}
-	if !c.ServerEnabled() {
-		t.Fatal("server side off after Listen")
+	if !ports.Registered(DirectPort) {
+		t.Fatal("port not served after Listen")
 	}
 	if c.Healthy() {
 		t.Fatal("healthy though RustDesk does not accept direct IP")
@@ -52,10 +53,17 @@ func TestHealthyFollowsDirectIPPort(t *testing.T) {
 	}
 
 	ln.Close() // and off again
-	if !c.ServerEnabled() {
-		t.Fatal("the switch changed by itself")
+	if !ports.Registered(DirectPort) {
+		t.Fatal("the server side turned off by itself")
 	}
 	if c.Healthy() {
 		t.Fatal("healthy after RustDesk stopped accepting")
+	}
+
+	if err := c.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	if ports.Registered(DirectPort) || c.Healthy() {
+		t.Fatal("still serving after Stop")
 	}
 }

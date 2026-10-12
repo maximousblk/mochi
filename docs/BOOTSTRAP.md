@@ -7,17 +7,13 @@ operation.
 
 ```json
 {
-  "settings": {
-    "ssh_config_path": ""
-  },
+  "settings": {},
   "trusted_keys": [
     { "name": "Acme CA", "key": "<64 lowercase hex characters>" }
   ]
 }
 ```
 
-- `ssh_config_path`: the SSH config file the SSH launcher manages. An empty
-  value means `~/.ssh/config`.
 - `trusted_keys`: machine keys whose certificates this build accepts. See
   [Admission](ADMISSION.md#trusted-keys).
 

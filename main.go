@@ -1,6 +1,5 @@
-// Command mochi runs the Mochi desktop app. Its subcommands are the tools the
-// app's launchers call: `issue` signs certificates, and `connector-ssh-proxy`
-// is the ProxyCommand the SSH launcher writes.
+// Command mochi runs the Mochi desktop app. Its subcommand, `issue`, signs
+// certificates.
 package main
 
 import (
@@ -23,8 +22,6 @@ func main() {
 	switch {
 	case len(args) > 0 && args[0] == "issue":
 		err = cmd.Issue(args[1:])
-	case len(args) > 0 && args[0] == "connector-ssh-proxy":
-		err = cmd.SSHProxy(args[1:])
 	default:
 		err = app.Run(args)
 	}

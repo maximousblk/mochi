@@ -29,8 +29,15 @@ func Relay(t testing.TB) *tailcfg.DERPRegion {
 // does not serve. The server is closed when the test ends.
 func Host(t testing.TB, relay *tailcfg.DERPRegion, serve map[uint16]func(net.Conn)) *tailcat.Server {
 	t.Helper()
+	return HostFunc(t, relay, func(port uint16) func(net.Conn) { return serve[port] })
+}
+
+// HostFunc is Host with the handler for each port looked up as each connection
+// arrives, so a test can change what the server serves while it runs.
+func HostFunc(t testing.TB, relay *tailcfg.DERPRegion, serve func(port uint16) func(net.Conn)) *tailcat.Server {
+	t.Helper()
 	s := &tailcat.Server{Region: relay, Logf: Quiet}
-	s.OnTCP = func(port uint16) func(net.Conn) { return serve[port] }
+	s.OnTCP = serve
 	if err := s.Start(); err != nil {
 		t.Fatal(err)
 	}

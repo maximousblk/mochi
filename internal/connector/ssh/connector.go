@@ -1,203 +1,77 @@
-// Package ssh is the SSH launcher. It writes a marked block to the user's SSH
-// config so that `ssh <host>` reaches a Mochi host through Tailcat, and it
-// implements the `connector-ssh-proxy` command that block runs.
+// Package ssh is the SSH launcher. Its server side runs an SSH server in process,
+// on this machine's Tailcat port ServePort. Its client side tunnels to a host's
+// SSH server, and copies the `ssh` command that reaches it through the tunnel.
 package ssh
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"io"
-	"net"
-	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
+	"log"
 
 	"github.com/ashwin-y/mochi/internal/admission"
 	"github.com/ashwin-y/mochi/internal/connector"
+	"github.com/ashwin-y/mochi/internal/sshserver"
 	"github.com/ashwin-y/mochi/internal/state"
 	"github.com/egoist/mygo/ui"
-	"github.com/tailscale/tailcat"
 )
 
-// Connector writes and removes the managed SSH config blocks of its hosts.
+// ServePort is the Tailcat port the SSH server listens on. It is not 22, so the
+// machine's own sshd, if it has one, is left alone.
+const ServePort uint16 = 22022
+
+// Connector serves SSH while listening, and tunnels to a host's SSH while
+// connected.
 type Connector struct {
-	configPath string
-	icon       *ui.SVG
-	enabled    map[string]bool
-	hosts      []state.Host
-	connector.ServerSwitch
+	ports    *connector.Ports
+	seed     []byte
+	copyText func(string)
+	icon     *ui.SVG
+	dialing  admission.Dialing
 }
 
-// New returns the SSH launcher managing configPath. icon is its tile icon.
-func New(configPath string, icon *ui.SVG) *Connector {
-	c := &Connector{
-		configPath: configPath,
-		icon:       icon,
-		enabled:    make(map[string]bool),
-	}
-	c.Listen()
-	return c
+// New returns the SSH launcher. seed is this machine's identity seed, from
+// which its SSH host key is derived. copyText puts text on the clipboard, and
+// icon is its tile icon.
+func New(ports *connector.Ports, seed []byte, copyText func(string), icon *ui.SVG, dialing admission.Dialing) *Connector {
+	return &Connector{ports: ports, seed: seed, copyText: copyText, icon: icon, dialing: dialing}
 }
 
-func (c *Connector) Name() string                 { return "SSH" }
-func (c *Connector) Icon() *ui.SVG                { return c.icon }
-func (c *Connector) SetHosts(hosts []state.Host)  { c.hosts = append(c.hosts[:0], hosts...) }
-func (c *Connector) Enabled(host state.Host) bool { return c.enabled[host.Address] }
+func (c *Connector) Name() string  { return "SSH" }
+func (c *Connector) Icon() *ui.SVG { return c.icon }
 
-// ServerServe serves SSH shell sessions on this machine.
-func (c *Connector) ServerServe(sv *connector.ServerServices) { sv.Shell = true }
-
-// Proxy implements `connector-ssh-proxy <tailcat-address> <port>`: it relays
-// stdin and stdout to the host's Tailcat TCP port. hosts supplies the stored
-// spelling of the address, because Windows OpenSSH lowercases %h.
-func Proxy(ctx context.Context, hosts []state.Host, args []string, stdin io.Reader, stdout io.Writer, dialing admission.Dialing) error {
-	if len(args) != 2 {
-		return fmt.Errorf("usage: mochi connector-ssh-proxy <tailcat-address> <port>")
-	}
-	addressText := canonicalAddress(hosts, args[0])
-	address, err := tailcat.ParseAddr(tailcat.Addr(addressText))
+// Listen serves the SSH server on ServePort.
+func (c *Connector) Listen() error {
+	hostKey, err := sshserver.HostKey(c.seed)
 	if err != nil {
-		return fmt.Errorf("invalid Tailcat address %q: %w", addressText, err)
+		return fmt.Errorf("SSH host key: %w", err)
 	}
-	port, err := strconv.ParseUint(args[1], 10, 16)
-	if err != nil || port == 0 {
-		return fmt.Errorf("invalid TCP port %q", args[1])
-	}
-	client := dialing.Dialer(address.Addr())
-	defer client.Close()
-	conn, err := client.DialTCPPort(ctx, uint16(port))
-	if err != nil {
-		return fmt.Errorf("connect to Tailcat host port %d: %w", port, err)
-	}
-	defer conn.Close()
-	stopClose := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	defer stopClose()
-	return proxyStreams(conn, stdin, stdout)
-}
-
-func canonicalAddress(hosts []state.Host, address string) string {
-	for _, host := range hosts {
-		if strings.EqualFold(host.Address, address) {
-			return host.Address
-		}
-	}
-	return address
-}
-
-func proxyStreams(conn net.Conn, stdin io.Reader, stdout io.Writer) error {
-	inputDone := make(chan error, 1)
-	go func() {
-		_, err := io.Copy(conn, stdin)
-		if err != nil {
-			_ = conn.Close()
-		} else if halfCloser, ok := conn.(interface{ CloseWrite() error }); ok {
-			_ = halfCloser.CloseWrite()
-		} else {
-			_ = conn.Close()
-		}
-		inputDone <- err
-	}()
-	_, outputErr := io.Copy(stdout, conn)
-	_ = conn.Close()
-	if outputErr != nil {
-		return outputErr
-	}
-	select {
-	case inputErr := <-inputDone:
-		return inputErr
-	default:
-		return nil
-	}
-}
-
-// Refresh reconciles the managed blocks in the SSH config with hosts: blocks
-// that exist are rewritten for the running executable, and missing ones mark
-// the host as not enabled.
-func (c *Connector) Refresh(hosts []state.Host) error {
-	data, err := os.ReadFile(c.configPath)
-	if errors.Is(err, os.ErrNotExist) {
-		for _, host := range hosts {
-			c.enabled[host.Address] = false
-		}
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	executable, err := currentExecutablePath()
-	if err != nil {
-		return err
-	}
-	text := string(data)
-	for _, host := range hosts {
-		begin, end := managedBlockMarkers(host)
-		if strings.Contains(text, begin) {
-			c.enabled[host.Address] = true
-			text = removeManagedBlock(text, begin, end)
-			text = appendManagedBlock(text, managedBlock(host, begin, end, executable))
-		} else {
-			c.enabled[host.Address] = false
-		}
-	}
-	if text != string(data) {
-		return c.write([]byte(text))
-	}
+	c.ports.Register(ServePort, sshserver.New(hostKey, log.Printf).Handle)
 	return nil
 }
 
-func (c *Connector) Connect(host state.Host) error {
-	return c.set(host, true)
-}
-
-func (c *Connector) Disconnect(host state.Host) error {
-	return c.set(host, false)
-}
-
-func (c *Connector) set(host state.Host, enabled bool) error {
-	data, err := os.ReadFile(c.configPath)
-	if errors.Is(err, os.ErrNotExist) {
-		if !enabled {
-			c.enabled[host.Address] = false
-			return nil
-		}
-	} else if err != nil {
-		return err
-	}
-	begin, end := managedBlockMarkers(host)
-	if !enabled && !strings.Contains(string(data), begin) {
-		c.enabled[host.Address] = false
-		return nil
-	}
-	text := removeManagedBlock(string(data), begin, end)
-	if enabled {
-		executable, err := currentExecutablePath()
-		if err != nil {
-			return err
-		}
-		text = appendManagedBlock(text, managedBlock(host, begin, end, executable))
-	}
-	if err := c.write([]byte(text)); err != nil {
-		return err
-	}
-	c.enabled[host.Address] = enabled
+// Stop stops serving SSH on ServePort.
+func (c *Connector) Stop() error {
+	c.ports.Unregister(ServePort)
 	return nil
 }
 
-func (c *Connector) write(data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(c.configPath), 0700); err != nil {
-		return err
-	}
-	return os.WriteFile(c.configPath, data, 0600)
+// Healthy reports whether this machine serves SSH.
+func (c *Connector) Healthy() bool {
+	return c.ports.Registered(ServePort)
 }
 
-func appendManagedBlock(text, block string) string {
-	if text != "" && !strings.HasSuffix(text, "\n") {
-		text += "\n"
+// Connect tunnels to the host's SSH server, and copies the command that reaches
+// it through the tunnel. The host key is matched by the host's node key, so
+// ssh's known hosts do not depend on the loopback address. The user adds their
+// own user name, which selects the account on the host.
+func (c *Connector) Connect(host state.Host) (connector.Client, error) {
+	info, err := connector.ParseHost(host.Address)
+	if err != nil {
+		return nil, err
 	}
-	if text != "" {
-		text += "\n"
+	t, err := connector.OpenTunnel(c.dialing.Dialer(info.Addr()), ServePort)
+	if err != nil {
+		return nil, err
 	}
-	return text + block
+	c.copyText(fmt.Sprintf("ssh -p %d -o HostKeyAlias=mochi-node-%s 127.0.0.1", t.Port(), info.ServerPublic.NodePublic.UntypedHexString()))
+	return t, nil
 }

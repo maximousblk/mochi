@@ -18,12 +18,17 @@ port is not supported.
 
 ## Launcher
 
-Enabling a host's RustDesk launcher does the following:
+Turning on a host's RustDesk launcher does the following:
 
 1. Mochi checks that the host accepts a connection on port 21118. If it does
-   not, the launcher stays off and the tooltip says why.
-2. Mochi forwards a local port to the host's port 21118.
-3. Mochi copies a `127.0.0.1:<port>` address to the clipboard.
+   not, the launcher stays off and the status says why.
+2. Mochi tunnels a loopback port on this machine to the host's port 21118.
+3. Mochi starts RustDesk with `--connect 127.0.0.1:<port>`, so RustDesk reaches
+   the host through the tunnel.
 
-Enter that address in RustDesk as the remote ID. Turning the launcher off closes
-the forward. Nothing is written to disk.
+RustDesk must be installed in Program Files on Windows. Otherwise the launcher
+says it is not installed, and nothing is opened.
+
+Clicking the RustDesk launcher again, removing the host, or quitting Mochi closes
+the tunnel. So does six hours without data moving through it. Nothing is written
+to disk.

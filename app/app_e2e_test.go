@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ashwin-y/mochi/internal/admission"
+	"github.com/ashwin-y/mochi/internal/connector"
 	"github.com/ashwin-y/mochi/internal/state"
 	"github.com/ashwin-y/mochi/internal/testharness"
 	"github.com/egoist/mygo/ui"
@@ -48,6 +50,7 @@ type node struct {
 	q      chan func()
 	opened []string // folders "Open containing folder" asked for
 	theme  ui.Theme // the theme the last frame was drawn with
+	copied string   // the last text a launcher copied
 
 	mu       sync.Mutex
 	received map[uint16][]byte // what the server's extra ports were sent
@@ -69,14 +72,12 @@ func newNode(t *testing.T, name, dir string, relay *tailcfg.DERPRegion, trusted 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetString("ssh_config_path", filepath.Join(dir, "ssh_config")); err != nil {
-		t.Fatal(err)
-	}
 	n := &node{t: t, name: name, dir: dir, q: make(chan func(), 4096), received: map[uint16][]byte{}}
 	a := &app{
 		relay:    relay,
 		runOnUI:  func(fn func()) { n.q <- fn },
 		openPath: func(p string) error { n.opened = append(n.opened, p); return nil },
+		copyText: func(s string) { n.copied = s },
 		serveExtra: func(port uint16) func(net.Conn) {
 			switch port {
 			case 9000:
@@ -110,6 +111,7 @@ func newNode(t *testing.T, name, dir string, relay *tailcfg.DERPRegion, trusted 
 // shutdown stops what the node started. Safe to call twice.
 func (n *node) shutdown() {
 	a := n.app
+	a.disconnectAll()
 	if a.stopGate != nil {
 		a.stopGate()
 		a.stopGate = nil
@@ -374,6 +376,11 @@ func TestApplication(t *testing.T) {
 			t.Fatalf("the server address does not parse: %v", err)
 		}
 		host.want("Pending approval", "Approved", "Blocked")
+		// The SSH launcher's switch on the host's Settings page turns its server on.
+		host.click("SSH launcher")
+		if !host.app.serving["SSH"] {
+			t.Fatal("the SSH server did not turn on from Settings")
+		}
 		// The database folder can be opened from Settings.
 		host.click("Open containing folder")
 		if len(host.opened) != 1 || host.opened[0] != host.dir {
@@ -425,40 +432,24 @@ func TestApplication(t *testing.T) {
 		host.until("the text to arrive", 10*time.Second, func() bool { return host.sentTo(9000) == "hello" })
 	})
 
-	step("the SSH launcher writes and removes the client's ssh config", func(t *testing.T) {
-		cfg := filepath.Join(alice.dir, "ssh_config")
+	step("the SSH launcher tunnels to the host's SSH server and copies the command that reaches it", func(t *testing.T) {
 		alice.click("SSH launcher")
-		if alice.app.status != "SSH enabled" {
+		if alice.app.status != "SSH connected" {
 			t.Fatalf("status = %q", alice.app.status)
 		}
-		raw, err := os.ReadFile(cfg)
+		tun := alice.app.connections[addr]["SSH"].(*connector.Tunnel)
+		id, err := connector.ParseHost(addr)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{"# BEGIN MOCHI MANAGED", "Host lab", "HostName " + addr, "connector-ssh-proxy " + addr + " %p"} {
-			if !strings.Contains(string(raw), want) {
-				t.Fatalf("ssh config lacks %q:\n%s", want, raw)
-			}
+		want := fmt.Sprintf("ssh -p %d -o HostKeyAlias=mochi-node-%s 127.0.0.1", tun.Port(), id.ServerPublic.NodePublic.UntypedHexString())
+		if alice.copied != want {
+			t.Fatalf("copied %q, want %q", alice.copied, want)
 		}
 		if !alice.enabledTile("SSH launcher") {
-			t.Fatal("the enabled SSH tile is not accent-filled")
+			t.Fatal("the connected SSH tile is not accent-filled")
 		}
-		alice.click("SSH launcher")
-		raw, _ = os.ReadFile(cfg)
-		if strings.Contains(string(raw), "MOCHI MANAGED") || alice.app.status != "SSH disabled" {
-			t.Fatalf("status %q; config after disabling:\n%s", alice.app.status, raw)
-		}
-		if alice.enabledTile("SSH launcher") {
-			t.Fatal("a disabled SSH tile is still accent-filled")
-		}
-	})
-
-	step("the host's shell service answers an approved client", func(t *testing.T) {
-		d := alice.app.dialing.Dialer(tailcat.Addr(addr))
-		defer d.Close()
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		conn, err := d.DialTCPPort(ctx, 22)
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", tun.Port()), 10*time.Second)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -466,25 +457,30 @@ func TestApplication(t *testing.T) {
 		buf := make([]byte, 4)
 		conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 		if _, err := io.ReadFull(conn, buf); err != nil || string(buf) != "SSH-" {
-			t.Fatalf("port 22 sent %q, err %v; want an SSH banner", buf, err)
+			t.Fatalf("the tunnel delivered %q, err %v; want an SSH banner", buf, err)
+		}
+		alice.click("SSH launcher")
+		if alice.app.status != "SSH disconnected" || alice.enabledTile("SSH launcher") {
+			t.Fatalf("status %q after disconnecting", alice.app.status)
 		}
 	})
 
 	step("the RustDesk launcher forwards the host's direct-IP port and starts the client", func(t *testing.T) {
 		argsFile := testharness.FakeRustDesk(t)
 		alice.click("RustDesk launcher")
-		alice.until("the forward to start", time.Minute, func() bool {
-			return strings.HasPrefix(alice.app.status, "RustDesk address copied") || strings.Contains(alice.app.status, "failed")
-		})
-		local := alice.tt.Clipboard()
+		if alice.app.status != "RustDesk connected" {
+			t.Fatalf("status = %q", alice.app.status)
+		}
 		var launched []string
 		alice.until("RustDesk to start", time.Minute, func() bool {
 			raw, err := os.ReadFile(argsFile)
 			launched = strings.Fields(string(raw))
 			return err == nil && len(launched) == 2
 		})
-		if launched[0] != "--connect" || launched[1] != local || !strings.HasPrefix(local, "127.0.0.1:") {
-			t.Fatalf("launched %q; clipboard %q; status %q", launched, local, alice.app.status)
+		tun := alice.app.connections[addr]["RustDesk"].(*connector.Tunnel)
+		local := fmt.Sprintf("127.0.0.1:%d", tun.Port())
+		if launched[0] != "--connect" || launched[1] != local {
+			t.Fatalf("launched %q; tunnel %q", launched, local)
 		}
 		if !alice.enabledTile("RustDesk launcher") {
 			t.Fatal("the enabled RustDesk tile is not accent-filled")
@@ -503,12 +499,12 @@ func TestApplication(t *testing.T) {
 		conn.Close()
 
 		alice.click("RustDesk launcher")
-		if alice.app.status != "RustDesk disabled" {
+		if alice.app.status != "RustDesk disconnected" {
 			t.Fatalf("status = %q", alice.app.status)
 		}
 		if c, err := net.DialTimeout("tcp", local, 2*time.Second); err == nil {
 			c.Close()
-			t.Fatal("the forward is still open after disabling")
+			t.Fatal("the tunnel is still open after disconnecting")
 		}
 	})
 
@@ -604,20 +600,21 @@ func TestApplication(t *testing.T) {
 		}
 	})
 
-	step("removing a host disables its launchers and forgets it", func(t *testing.T) {
+	step("removing a host disconnects its launchers and forgets it", func(t *testing.T) {
 		alice.click("SSH launcher")
-		cfg := filepath.Join(alice.dir, "ssh_config")
-		if raw, _ := os.ReadFile(cfg); !strings.Contains(string(raw), "MOCHI MANAGED") {
-			t.Fatalf("SSH was not enabled: %q (status %q)", raw, alice.app.status)
-		}
+		local := alice.app.connections[addr]["SSH"].(*connector.Tunnel).Port()
 		alice.click("Remove host")
 		alice.want("Remove lab?")
 		alice.click("No")
 		alice.wantNot("Remove lab?")
+		if _, ok := alice.app.connections[addr]["SSH"]; !ok {
+			t.Fatal("cancelling the removal dropped the connection")
+		}
 		alice.click("Remove host")
 		alice.click("Yes")
-		if raw, _ := os.ReadFile(cfg); strings.Contains(string(raw), "MOCHI MANAGED") {
-			t.Fatalf("the ssh config entry survived removal:\n%s", raw)
+		if c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", local), 2*time.Second); err == nil {
+			c.Close()
+			t.Fatal("removing the host left its tunnel open")
 		}
 		if stored, _ := alice.app.store.Hosts(); len(stored) != 0 {
 			t.Fatalf("stored hosts = %+v", stored)
@@ -645,6 +642,9 @@ func TestApplication(t *testing.T) {
 		again := newNode(t, "host again", dir, relay, caPub)
 		if again.app.serverEnabled {
 			t.Fatal("the restarted app thinks the server is enabled")
+		}
+		if !again.app.serving["SSH"] {
+			t.Fatal("the SSH server did not come back on after a restart")
 		}
 		again.settings()
 		again.toggleServer()

@@ -15,7 +15,9 @@ Coverage numbers are a diagnostic, not a goal.
 - **Shared harness.** Tunnel tests start their network with
   `internal/testharness`: `Relay(t)` starts a DERP relay, `Host(t, relay, ports)`
   starts a Tailcat host serving the ports a test needs, and `Address(host)`
-  returns the address clients dial. Don't set up a relay by hand.
+  returns the address clients dial. `HostFunc` does the same with the handler
+  looked up on each connection, for a test whose ports are registered while the
+  host runs. Don't set up a relay by hand.
 - **No test-only exports.** If a test needs internal state, test it from the
   package that owns the state.
 
@@ -29,17 +31,17 @@ Coverage numbers are a diagnostic, not a goal.
 | Server address and approvals survive a restart | `internal/admission/onekey_test.go`: `TestServerRestart` |
 | A machine can serve and dial at once | `internal/admission/onekey_test.go`: `TestServeAndDialOnOneMachine` |
 | Issue a certificate from the command line | `cmd/issue_test.go` |
-| Per-connector server switches open and close ports at runtime | `app/serverside_test.go` |
-| Remove a host disables all its launchers before deleting it | `app/connector_test.go` |
-| SSH config block: written, refreshed, removed, user lines kept | `internal/connector/ssh/sshconfig_test.go` |
-| `connector-ssh-proxy` relays bytes and validates its arguments | `internal/connector/ssh/sshproxy_test.go` |
-| Files share mounts a host's files, read and write, rename, delete | `internal/connector/files/sftpfs_test.go`, `files_test.go` |
+| A tunnel carries bytes both ways, reports when it was last used, and closes on disconnect | `internal/connector/tunnel_test.go` |
+| A port is served only between Listen and Stop | `internal/connector/ports_test.go`, `internal/connector/webdav/webdav_test.go`, `internal/connector/ssh/connector_test.go`, `internal/connector/rustdesk/listen_test.go` |
+| SSH: the copied command reaches the host's SSH server as the account the user names | `internal/connector/ssh/connector_test.go`: `TestSSHOverTailcatThroughCopiedCommand` |
+| Removing a host disconnects its clients before deleting it | `app/connections_test.go` |
+| Clients idle for six hours are disconnected | `app/connections_test.go` |
 | WebDAV share reads, lists, writes and moves through a tunnel | `internal/connector/webdav/webdav_test.go` |
-| Share addresses, path redaction, prefix guard, Windows root probe, logs | `internal/share/share_test.go` |
-| RustDesk forwards direct IP, launches the client, refuses when direct IP is off | `internal/connector/rustdesk/forward_test.go` |
+| Share addresses and request logs | `internal/share/share_test.go` |
+| RustDesk tunnels direct IP, launches the client, refuses when direct IP is off, and disconnects when the launch fails | `internal/connector/rustdesk/connect_test.go` |
 | RustDesk install location | `internal/connector/rustdesk/executable_test.go` |
-| RustDesk server side turns on regardless, and is healthy only while direct IP is on | `internal/connector/rustdesk/listen_test.go` |
-| A listening but unhealthy server tile stays on and is yellow | `app/health_test.go` |
+| RustDesk server side is healthy only while direct IP is on | `internal/connector/rustdesk/listen_test.go` |
+| A listening but unhealthy launcher tile stays on and is yellow | `app/health_test.go` |
 | Send text delivers the exact bytes to a host port | `internal/connector/textsender/send_test.go` |
 | Persistent state: hosts, settings, identity, migrations | `internal/state/state_test.go` |
 
@@ -57,6 +59,6 @@ minutes, mostly in the admission tests.
 1. Name the user-visible behavior, then find the feature in the table above.
 2. Start from the harness: `relay := testharness.Relay(t)`, then `Host` with the
    ports the feature needs.
-3. Drive the feature through its public entry point (`Enable`, the view, the
-   CLI), and assert what the other side observes.
+3. Drive the feature through its public entry point (`Connect`, `Listen`, the
+   view, the CLI), and assert what the other side observes.
 4. Add a row to the table.

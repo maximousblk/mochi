@@ -1,6 +1,4 @@
 {
-  "settings": {
-	"ssh_config_path": ""
-  },
+  "settings": {},
   "trusted_keys": []
 }
