@@ -23,7 +23,13 @@ way with `-platform`.
 
 ## Nix flake app
 
-The flake is Linux-only for now (`x86_64-linux` and `aarch64-linux`).
+The flake has `Mochi` and `MochiInstaller` for six systems:
+`x86_64-linux`, `aarch64-linux`, `x86_64-darwin`, `aarch64-darwin`,
+`x86_64-windows` and `aarch64-windows`. The Windows ones are cross-built from
+Linux, so `nix build .#packages.x86_64-windows.MochiInstaller` works on Linux.
+The macOS `MochiInstaller` (a disk image) needs macOS's `hdiutil`, so it fails
+on Linux with that reason. `Mochi.app` for macOS is built on Linux and is
+unsigned; sign it on a Mac.
 
 From a checkout:
 
