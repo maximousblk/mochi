@@ -43,9 +43,10 @@
           src = self;
           vendorHash = "sha256-AqLHr35Ur890OwgLSl/YCa/PogmvGpQoRgaZZQNrXmM=";
 
-          env.CGO_ENABLED = "1";
-          nativeBuildInputs = [ pkgs.pkg-config pkgs.makeWrapper ];
-          buildInputs = linuxGraphics pkgs;
+          # No cgo anywhere: MyGo loads the desktop libraries at run time with
+          # purego, so they are needed by the wrapper, not the build.
+          env.CGO_ENABLED = "0";
+          nativeBuildInputs = [ pkgs.makeWrapper ];
 
           # The tests run local relays and take minutes; run them with go test.
           doCheck = false;
@@ -95,7 +96,7 @@
             LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (linuxGraphics pkgs);
 
             shellHook = ''
-              export CGO_ENABLED=1
+              export CGO_ENABLED=0
               export GOTOOLCHAIN=local
               echo "Mochi development shell"
               echo "Go: $(go version)"
