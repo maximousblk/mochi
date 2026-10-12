@@ -74,6 +74,9 @@ func Run(args []string) error {
 	if err := registerFonts(); err != nil {
 		return fmt.Errorf("registering Ioskeley Mono: %w", err)
 	}
+	// Mochi lives in the menu bar until its window opens: no Dock icon in
+	// the background. showWindow and the close handler switch it per window.
+	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
 	statePath, err := state.Path()
 	if err != nil {
 		return err
@@ -106,6 +109,7 @@ func Run(args []string) error {
 			if !a.quitting {
 				e.PreventDefault()
 				a.window.Hide()
+				mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
 			}
 		})
 		a.tray, _ = mygo.NewTray(mygo.TrayOptions{
@@ -217,6 +221,8 @@ func (a *app) showWindow() {
 	if a.window == nil {
 		return
 	}
+	// The Dock icon shows only while the window is open (macOS; no-op elsewhere).
+	mygo.App.SetActivationPolicy(mygo.ActivationPolicyRegular)
 	a.window.Show()
 	a.window.Focus()
 }

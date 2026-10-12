@@ -4,5 +4,8 @@
   "version": "0.1.0",
   "copyright": "Copyright 2026 Mochi contributors",
   "main": ".",
-  "icon": "app/resources/icon.png"
+  "icon": "app/resources/icon.png",
+  "macos": {
+    "infoPlist": { "LSUIElement": true }
+  }
 }

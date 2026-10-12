@@ -118,6 +118,7 @@
             <key>CFBundleExecutable</key><string>Mochi</string>
             <key>CFBundleIdentifier</key><string>dev.mochi.tailcat</string>
             <key>CFBundleIconFile</key><string>AppIcon</string>
+            <key>LSUIElement</key><true/>
             <key>CFBundlePackageType</key><string>APPL</string>
             <key>CFBundleShortVersionString</key><string>${version}</string>
             <key>CFBundleVersion</key><string>${version}</string>
