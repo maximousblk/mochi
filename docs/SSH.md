@@ -13,6 +13,11 @@ same machine. The switch is off by default.
 The host key is derived from the machine's identity, so it stays the same for as
 long as the identity does, and no key file is written.
 
+On macOS, shells reach the same files as a terminal with **Full Disk Access**
+only if Mochi has it, because macOS checks the app that started them. See
+[WebDAV](WEBDAV.md#server-side): the SSH tile is yellow while it is missing,
+and Mochi asks for it once per run, for SSH and WebDAV together.
+
 ### Accounts
 
 The SSH username selects the account. A username that names the account Mochi

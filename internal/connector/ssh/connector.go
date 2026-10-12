@@ -26,13 +26,14 @@ type Connector struct {
 	copyText func(string)
 	icon     *ui.SVG
 	dialing  admission.Dialing
+	access   *connector.DiskAccess
 }
 
 // New returns the SSH launcher. seed is this machine's identity seed, from
 // which its SSH host key is derived. copyText puts text on the clipboard, and
 // icon is its tile icon.
 func New(ports *connector.Ports, seed []byte, copyText func(string), icon *ui.SVG, dialing admission.Dialing) *Connector {
-	return &Connector{ports: ports, seed: seed, copyText: copyText, icon: icon, dialing: dialing}
+	return &Connector{ports: ports, seed: seed, copyText: copyText, icon: icon, dialing: dialing, access: connector.SystemDiskAccess}
 }
 
 func (c *Connector) Name() string  { return "SSH" }
@@ -54,9 +55,11 @@ func (c *Connector) Stop() error {
 	return nil
 }
 
-// Healthy reports whether this machine serves SSH.
+// Healthy reports whether this machine serves SSH, and its shells can reach
+// everything the user can, as a terminal's do. Shells are Mochi's children, so
+// on macOS they need Mochi to have Full Disk Access (see connector.DiskAccess).
 func (c *Connector) Healthy() bool {
-	return c.ports.Registered(ServePort)
+	return c.ports.Registered(ServePort) && c.access.Check()
 }
 
 // Connect tunnels to the host's SSH server, and copies the command that reaches

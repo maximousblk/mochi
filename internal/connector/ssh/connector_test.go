@@ -20,6 +20,8 @@ import (
 func TestListenServesSSHUntilStop(t *testing.T) {
 	ports := connector.NewPorts()
 	c := New(ports, state.NewIdentity().Seed(), nil, nil, admission.Dialing{})
+	access := true
+	c.access = connector.NewDiskAccess(func() bool { return access }, func() {})
 	if c.Healthy() {
 		t.Fatal("healthy before Listen")
 	}
@@ -28,6 +30,10 @@ func TestListenServesSSHUntilStop(t *testing.T) {
 	}
 	if !ports.Registered(ServePort) || !c.Healthy() {
 		t.Fatal("SSH port not served after Listen")
+	}
+	access = false
+	if c.Healthy() {
+		t.Fatal("healthy while its shells cannot reach the user's files")
 	}
 	if err := c.Stop(); err != nil {
 		t.Fatal(err)

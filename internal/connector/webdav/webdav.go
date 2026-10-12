@@ -41,11 +41,7 @@ type Connector struct {
 	icon     *ui.SVG
 	dialing  admission.Dialing
 	handler  http.Handler // serves the home volume; nil if there is none
-
-	// Seams for tests; the platform's in the real launcher.
-	hasAccess     func() bool // whether every served folder is readable
-	requestAccess func()      // asks the user for that access
-	askedAccess   sync.Once
+	access   *connector.DiskAccess
 }
 
 // New returns the WebDAV launcher. copyText puts text on the clipboard, and icon
@@ -58,8 +54,7 @@ func New(ports *connector.Ports, copyText func(string), icon *ui.SVG, dialing ad
 // newConnector returns a launcher that serves the directory root, logging to logf.
 // root is "" if there is nothing to serve.
 func newConnector(ports *connector.Ports, copyText func(string), icon *ui.SVG, dialing admission.Dialing, root string, logf func(format string, args ...any)) *Connector {
-	c := &Connector{ports: ports, copyText: copyText, icon: icon, dialing: dialing,
-		hasAccess: hasDiskAccess, requestAccess: requestDiskAccess}
+	c := &Connector{ports: ports, copyText: copyText, icon: icon, dialing: dialing, access: connector.SystemDiskAccess}
 	if root != "" {
 		c.handler = newHandler(xwebdav.Dir(root), logf)
 	}
@@ -165,17 +160,9 @@ func (c *Connector) Stop() error {
 }
 
 // Healthy reports whether this machine serves WebDAV and can read everything it
-// serves. On macOS that needs Full Disk Access: the first time Healthy finds it
-// missing, it opens the setting for the user to grant.
+// serves, which on macOS needs Full Disk Access (see connector.DiskAccess).
 func (c *Connector) Healthy() bool {
-	if !c.ports.Registered(ServePort) {
-		return false
-	}
-	if c.hasAccess() {
-		return true
-	}
-	c.askedAccess.Do(c.requestAccess)
-	return false
+	return c.ports.Registered(ServePort) && c.access.Check()
 }
 
 // Connect tunnels to the host's WebDAV port, and opens the share in the platform

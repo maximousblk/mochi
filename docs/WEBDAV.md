@@ -11,11 +11,14 @@ WebDAV on Tailcat port 8080, read-write, with its own lock table. That is the
 same reach a shell session has. The switch is off by default.
 
 On macOS, Mochi needs **Full Disk Access** to serve protected folders such as
-Desktop, Documents and Downloads; without it Finder fails to list them. macOS
-has no prompt for this access. While the switch is on and Mochi lacks it, the
-WebDAV tile in Settings is yellow, and the first time Mochi notices, it opens
+Desktop, Documents, Downloads, iCloud Drive and other volumes; without it Finder
+fails to list them. It covers all of them, so no folder asks on its own. macOS
+has no prompt for it, and no Info.plist key requests it. While the switch is on
+and Mochi lacks it, the WebDAV tile in Settings is yellow, and the first time
+Mochi notices, it opens
 **System Settings → Privacy & Security → Full Disk Access** for you to turn
-Mochi on there. The tile returns to normal within a few seconds of granting it.
+Mochi on there. It asks once per run, for SSH and WebDAV together. The tile
+returns to normal within a few seconds of granting it.
 An unsigned `Mochi.app` that is replaced loses the grant, so grant it again.
 
 Only Mochi hosts serve WebDAV.
