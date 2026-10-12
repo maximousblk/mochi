@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tailscale/tailcat"
@@ -21,6 +22,9 @@ type Dialer struct {
 	*tailcat.Client
 	// Certs returns the certificates to present, if any. It may be nil.
 	Certs func() [][]byte
+
+	release func() error // gives back a shared client; nil if Client is the Dialer's own
+	once    sync.Once
 }
 
 // Dialing is what a connector needs to reach any host: this machine's client
@@ -30,12 +34,68 @@ type Dialing struct {
 	Certs func() [][]byte
 }
 
-// Dialer returns a Dialer for the server at addr.
-func (d Dialing) Dialer(addr tailcat.Addr) *Dialer { return NewDialer(addr, d.Key, d.Certs, nil) }
+// Dialer returns a Dialer for the server at addr. Dialers for the same server
+// and key share one tailcat client, which closes with the last of them: a
+// server sees one peer per node key, so two clients with the same key would
+// take the WireGuard session from each other, and the connections of the one
+// that lost it would stall. With no key, each Dialer has a client of its own.
+func (d Dialing) Dialer(addr tailcat.Addr) *Dialer {
+	if d.Key.IsZero() {
+		return NewDialer(addr, d.Key, d.Certs, nil)
+	}
+	id := sharedID{node: d.Key.Public(), server: addr}
+	shared.mu.Lock()
+	defer shared.mu.Unlock()
+	c := shared.clients[id]
+	if c == nil {
+		c = &sharedClient{client: &tailcat.Client{Server: addr, Key: d.Key}}
+		shared.clients[id] = c
+	}
+	c.refs++
+	return &Dialer{Client: c.client, Certs: d.Certs, release: func() error {
+		shared.mu.Lock()
+		defer shared.mu.Unlock()
+		if c.refs--; c.refs > 0 {
+			return nil
+		}
+		delete(shared.clients, id)
+		// Closed under the lock, so no new client for this key starts while
+		// this one still holds the session.
+		return c.client.Close()
+	}}
+}
 
-// NewDialer returns a Dialer for the server at addr, dialing with k.
+// shared holds the tailcat clients Dialing's Dialers share.
+var shared = struct {
+	mu      sync.Mutex
+	clients map[sharedID]*sharedClient
+}{clients: map[sharedID]*sharedClient{}}
+
+type sharedID struct {
+	node   key.NodePublic
+	server tailcat.Addr
+}
+
+type sharedClient struct {
+	client *tailcat.Client
+	refs   int // open Dialers using client
+}
+
+// NewDialer returns a Dialer for the server at addr, dialing with k through a
+// client of its own.
 func NewDialer(addr tailcat.Addr, k key.NodePrivate, certs func() [][]byte, logf func(string, ...any)) *Dialer {
 	return &Dialer{Client: &tailcat.Client{Server: addr, Key: k, Logf: logf}, Certs: certs}
+}
+
+// Close closes the Dialer. A shared client stays open while other Dialers use
+// it. Close may be repeated.
+func (d *Dialer) Close() error {
+	if d.release == nil {
+		return d.Client.Close()
+	}
+	var err error
+	d.once.Do(func() { err = d.release() })
+	return err
 }
 
 // DialTCPPort replaces tailcat.Client's, so callers need no other change.

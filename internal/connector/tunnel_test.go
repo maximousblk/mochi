@@ -90,6 +90,65 @@ func TestTunnelCarriesBytesAndTracksLastUsed(t *testing.T) {
 	}
 }
 
+// One machine's launchers can all be connected to a host at once, as SSH, WebDAV
+// and RustDesk are. Their tunnels dial with the same node key, and each keeps
+// carrying data while the others do. Closing one leaves the rest working.
+func TestTunnelsToOneHostWorkTogether(t *testing.T) {
+	relay := testharness.Relay(t)
+	host := testharness.Host(t, relay, map[uint16]func(net.Conn){
+		echoPort: func(c net.Conn) { defer c.Close(); io.Copy(c, c) },
+	})
+	dialing := admission.Dialing{Key: key.NewNode()}
+	addr := tailcat.Addr(testharness.Address(host))
+	var tuns []*Tunnel
+	for range 3 {
+		tun, err := OpenTunnel(dialing.Dialer(addr), echoPort)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { tun.Disconnect() })
+		tuns = append(tuns, tun)
+	}
+	var conns []net.Conn
+	for _, tun := range tuns {
+		conn := dialTunnel(t, tun)
+		defer conn.Close()
+		conns = append(conns, conn)
+	}
+	echo := func(i int, round int) {
+		t.Helper()
+		msg := fmt.Sprintf("%d:%02d", i, round)
+		if _, err := conns[i].Write([]byte(msg)); err != nil {
+			t.Fatalf("tunnel %d round %d: write: %v", i, round, err)
+		}
+		reply := make([]byte, len(msg))
+		if _, err := io.ReadFull(conns[i], reply); err != nil || string(reply) != msg {
+			t.Fatalf("tunnel %d round %d: reply %q, %v; want %q", i, round, reply, err, msg)
+		}
+	}
+	// Past one WireGuard handshake retry, so a client whose session another
+	// took over would have stalled by the end.
+	deadline := time.Now().Add(7 * time.Second)
+	for round := 0; time.Now().Before(deadline); round++ {
+		for i := range conns {
+			echo(i, round%100)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+
+	if err := tuns[0].Disconnect(); err != nil {
+		t.Fatal(err)
+	}
+	conns = conns[1:]
+	for i := range conns {
+		echo(i, 0)
+	}
+	late := dialTunnel(t, tuns[1])
+	defer late.Close()
+	conns = append(conns, late)
+	echo(len(conns)-1, 1)
+}
+
 // Disconnect closes open connections and the listener, and may be repeated.
 func TestTunnelDisconnectClosesConnections(t *testing.T) {
 	tun := openTestTunnel(t)
