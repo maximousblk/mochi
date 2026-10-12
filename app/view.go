@@ -138,7 +138,7 @@ func (a *app) hostView(c *ui.Context) {
 	ui.Row(c).Gap(12).Children(func() {
 		for _, lc := range a.connectors {
 			enabled := lc.Enabled(*host)
-			if launcherTile(c, lc.Name(), "Toggle "+lc.Name()+" connector", lc.Icon(), enabled).Clicked() {
+			if launcherTile(c, lc.Name(), "Toggle "+lc.Name()+" connector", lc.Icon(), enabled, false).Clicked() {
 				var err error
 				if enabled {
 					err = lc.Disconnect(*host)
@@ -157,27 +157,32 @@ func (a *app) hostView(c *ui.Context) {
 				}
 			}
 		}
-		if launcherTile(c, "Send text", "Send text to this host", textSenderIcon, false).Clicked() {
+		if launcherTile(c, "Send text", "Send text to this host", textSenderIcon, false, false).Clicked() {
 			a.sendOpen = true
 		}
 	})
 	a.sendDialog(c, *host)
 }
 
-// launcherTile is a square launcher: accent-filled while enabled.
-func launcherTile(c *ui.Context, name, tooltip string, icon *ui.SVG, enabled bool) ui.Element {
+// launcherTile is a square launcher: accent-filled while enabled, and yellow
+// while enabled but not working (warn).
+func launcherTile(c *ui.Context, name, tooltip string, icon *ui.SVG, enabled, warn bool) ui.Element {
 	theme := c.Theme()
+	fill, text := theme.Accent, theme.AccentText
+	if warn {
+		fill, text = theme.Warning, ui.Hex("#1c1917")
+	}
 	tile := ui.Button(c, "").Label(name + " launcher").Tooltip(tooltip).Width(104).Height(92)
 	if enabled {
-		tile.Background(theme.Accent).TextColor(theme.AccentText)
+		tile.Background(fill).TextColor(text)
 	}
 	tile.Children(func() {
 		ui.Column(c).AlignItems(ui.Center).Gap(5).Children(func() {
 			iconEl := ui.Icon(c, icon).Size(28, 28)
 			label := ui.Text(c, name).FontSize(12)
 			if enabled {
-				iconEl.TextColor(theme.AccentText)
-				label.TextColor(theme.AccentText)
+				iconEl.TextColor(text)
+				label.TextColor(text)
 			}
 		})
 	})
@@ -235,7 +240,12 @@ func (a *app) settingsView(c *ui.Context) {
 	ui.Row(c).Gap(12).Children(func() {
 		for _, lc := range a.connectors {
 			on := lc.ServerEnabled()
-			if launcherTile(c, lc.Name(), "Let other machines use "+lc.Name(), lc.Icon(), on).Clicked() {
+			warn := on && a.unhealthy[lc.Name()]
+			tip := "Let other machines use " + lc.Name()
+			if warn {
+				tip += " (on, but not working: check that the program is set up to accept it)"
+			}
+			if launcherTile(c, lc.Name(), tip, lc.Icon(), on, warn).Clicked() {
 				var err error
 				if on {
 					err = lc.StopListening()
@@ -247,6 +257,7 @@ func (a *app) settingsView(c *ui.Context) {
 				} else if err := a.store.SetBool(connector.SettingKey(lc), !on); err != nil {
 					a.status = "Saving " + lc.Name() + " setting failed: " + err.Error()
 				}
+				a.checkHealth()
 			}
 		}
 	})

@@ -3,33 +3,38 @@ package rustdesk
 import (
 	"fmt"
 	"net"
-	"strings"
 	"testing"
 
 	"github.com/ashwin-y/mochi/internal/admission"
 )
 
-// Listen fails with a prompt while nothing accepts connections on RustDesk's
-// direct-IP port, and the server side stays off. Once RustDesk listens, Listen
-// succeeds and Healthy is true; if RustDesk stops listening, Healthy turns
-// false though the switch is still on.
-func TestListenFollowsDirectIPPort(t *testing.T) {
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", DirectPort))
+// The server side turns on whether or not RustDesk accepts direct IP yet. It
+// is healthy only while something accepts on RustDesk's direct-IP port, so it
+// turns unhealthy, still on, when direct IP is off, and healthy again when it
+// is turned on.
+func TestHealthyFollowsDirectIPPort(t *testing.T) {
+	addr := fmt.Sprintf("127.0.0.1:%d", DirectPort)
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		t.Skipf("port %d is in use on this machine: %v", DirectPort, err)
 	}
 	ln.Close() // RustDesk with direct IP off: nothing listens
 
 	c := New(nil, admission.Dialing{})
-	err = c.Listen()
-	if err == nil || !strings.Contains(err.Error(), "Enable direct IP access") {
-		t.Fatalf("Listen with direct IP off = %v; want the prompt to enable it", err)
+	if c.Healthy() {
+		t.Fatal("healthy while the server side is off")
 	}
-	if c.ServerEnabled() || c.Healthy() {
-		t.Fatal("server side on or healthy after a failed Listen")
+	if err := c.Listen(); err != nil {
+		t.Fatalf("Listen with direct IP off: %v", err)
+	}
+	if !c.ServerEnabled() {
+		t.Fatal("server side off after Listen")
+	}
+	if c.Healthy() {
+		t.Fatal("healthy though RustDesk does not accept direct IP")
 	}
 
-	ln, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", DirectPort))
+	ln, err = net.Listen("tcp", addr) // the user turns direct IP on
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,18 +47,15 @@ func TestListenFollowsDirectIPPort(t *testing.T) {
 			conn.Close()
 		}
 	}()
-	if err := c.Listen(); err != nil {
-		t.Fatalf("Listen with direct IP on: %v", err)
-	}
-	if !c.ServerEnabled() || !c.Healthy() {
-		t.Fatal("server side not on and healthy after Listen")
+	if !c.Healthy() {
+		t.Fatal("not healthy while RustDesk accepts direct IP")
 	}
 
-	ln.Close() // the user turns direct IP off again
+	ln.Close() // and off again
 	if !c.ServerEnabled() {
 		t.Fatal("the switch changed by itself")
 	}
 	if c.Healthy() {
-		t.Fatal("Healthy after RustDesk stopped listening")
+		t.Fatal("healthy after RustDesk stopped accepting")
 	}
 }

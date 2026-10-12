@@ -22,6 +22,8 @@ const probeTimeout = 2 * time.Second
 //     actually does. Only the default port, 21118, is probed.
 //
 // So Mochi asks the user to turn the option on and checks the result.
+// Listen does not probe: the server side can be turned on first, and Healthy
+// reports whether RustDesk is accepting yet.
 
 // probe reports whether something accepts connections on RustDesk's default
 // direct-IP port on this machine.
@@ -29,24 +31,16 @@ func probe() error {
 	addr := fmt.Sprintf("127.0.0.1:%d", DirectPort)
 	conn, err := net.DialTimeout("tcp", addr, probeTimeout)
 	if err != nil {
-		return fmt.Errorf("RustDesk is not accepting direct IP connections on port %d: in RustDesk, open Settings > Security, turn on \"Enable direct IP access\", then try again: %w", DirectPort, err)
+		return err
 	}
 	conn.Close()
 	return nil
 }
 
-// Listen turns the server side on, if RustDesk accepts direct IP connections
-// on this machine. If it does not, Listen fails and the server side stays off.
-func (c *Connector) Listen() error {
-	if err := probe(); err != nil {
-		return err
-	}
-	return c.ServerSwitch.Listen()
-}
-
-// Healthy reports whether the server side is on and RustDesk still accepts
-// direct IP connections, so it is false if the user turned the option off after
-// Listen.
+// Healthy reports whether the server side is on and RustDesk accepts direct IP
+// connections on this machine. It is false while the user has not turned
+// "Enable direct IP access" on in RustDesk (Settings > Security), or has turned
+// it off again. It dials, so callers poll it off the UI thread.
 func (c *Connector) Healthy() bool {
 	return c.ServerEnabled() && probe() == nil
 }

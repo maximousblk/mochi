@@ -64,6 +64,11 @@ type app struct {
 	// the top, as the Settings page needs after a switch is flipped.
 	pageScroll ui.ScrollState
 
+	// unhealthy names the connectors whose server side is on but not working,
+	// as of the last check. Healthy may dial, so the view reads this instead
+	// of calling it on every frame.
+	unhealthy map[string]bool
+
 	// Seams for tests; all nil in the real app.
 	runOnUI    func(func())
 	relay      *tailcfg.DERPRegion              // serve through this relay instead of picking a public one
@@ -138,6 +143,7 @@ func Run(args []string) error {
 		if a.serverEnabled {
 			a.startServer()
 		}
+		go a.watchHealth()
 	})
 	mygo.App.OnWindowAllClosed(func() {})
 	return mygo.App.Run()
@@ -230,6 +236,40 @@ func (a *app) update(fn func()) {
 		return
 	}
 	a.window.Update(fn)
+}
+
+// healthCheckInterval is how often the connectors' health is checked.
+const healthCheckInterval = 5 * time.Second
+
+// unhealthyNow asks each connector whose server side is on whether it is
+// healthy, and returns the names of those that are not. It may dial, so it
+// runs off the UI thread.
+func (a *app) unhealthyNow() map[string]bool {
+	bad := map[string]bool{}
+	for _, c := range a.connectors {
+		if c.ServerEnabled() && !c.Healthy() {
+			bad[c.Name()] = true
+		}
+	}
+	return bad
+}
+
+// checkHealth refreshes unhealthy in the background.
+func (a *app) checkHealth() {
+	go func() {
+		bad := a.unhealthyNow()
+		a.update(func() { a.unhealthy = bad })
+	}()
+}
+
+// watchHealth checks the connectors' health now and then, for as long as the
+// app runs.
+func (a *app) watchHealth() {
+	for {
+		bad := a.unhealthyNow()
+		a.update(func() { a.unhealthy = bad })
+		time.Sleep(healthCheckInterval)
+	}
 }
 
 func (a *app) showWindow() {

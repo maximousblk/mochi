@@ -9,12 +9,12 @@ With the RustDesk switch on, the server forwards TCP port 21118 to RustDesk on
 this machine. The switch is off by default.
 
 Mochi does not change RustDesk's settings. Turn on **Enable direct IP access**
-in RustDesk under **Settings → Security** yourself. Turning the switch on
-probes `127.0.0.1:21118`: if RustDesk does not accept there, the switch stays
-off and the status bar says what to do. Only the default port is probed, so a
-custom direct-access port is not supported. If you turn the option off later,
-the switch stays on, but the connector reports itself unhealthy and
-connections fail until you turn it back on.
+in RustDesk under **Settings → Security** yourself. The switch turns on either
+way. Every few seconds Mochi probes `127.0.0.1:21118`: while RustDesk does not
+accept there, the RustDesk tile in Settings is yellow instead of the accent
+color, and connections to this machine fail. It returns to normal once direct
+IP access is on. Only the default port is probed, so a custom direct-access
+port is not supported.
 
 ## Launcher
 
