@@ -4,8 +4,8 @@
 // `RustDesk.exe --connect 127.0.0.1:<port>`. The address is also copied to the
 // clipboard. Enabling checks that the host accepts the connection first. If
 // RustDesk is not installed in Program Files, Enable fails and nothing is left
-// running. Disabling closes the forward. Turning the server side on sets
-// direct IP access in RustDesk's settings file (see Listen).
+// running. Disabling closes the forward. Turning the server side on needs
+// direct IP access already on in RustDesk, which Listen checks by probing.
 package rustdesk
 
 import (

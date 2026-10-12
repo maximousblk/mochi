@@ -38,6 +38,7 @@ Coverage numbers are a diagnostic, not a goal.
 | Share addresses, path redaction, prefix guard, Windows root probe, logs | `internal/share/share_test.go` |
 | RustDesk forwards direct IP, launches the client, refuses when direct IP is off | `internal/connector/rustdesk/forward_test.go` |
 | RustDesk install location | `internal/connector/rustdesk/executable_test.go` |
+| RustDesk server side turns on only while direct IP is on, and reports unhealthy when it goes off | `internal/connector/rustdesk/listen_test.go` |
 | Send text delivers the exact bytes to a host port | `internal/connector/textsender/send_test.go` |
 | Persistent state: hosts, settings, identity, migrations | `internal/state/state_test.go` |
 

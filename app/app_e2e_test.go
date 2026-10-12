@@ -59,7 +59,6 @@ type node struct {
 // with direct IP access would.
 func newNode(t *testing.T, name, dir string, relay *tailcfg.DERPRegion, trusted ...ed25519.PublicKey) *node {
 	t.Helper()
-	testharness.IsolateUserDirs(t)
 	if err := registerFonts(); err != nil {
 		t.Fatal(err)
 	}

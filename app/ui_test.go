@@ -12,7 +12,6 @@ import (
 	"github.com/ashwin-y/mochi/internal/admission"
 	"github.com/ashwin-y/mochi/internal/connector"
 	"github.com/ashwin-y/mochi/internal/state"
-	"github.com/ashwin-y/mochi/internal/testharness"
 	"github.com/egoist/mygo/ui"
 	"github.com/tailscale/tailcat"
 	"tailscale.com/types/key"
@@ -83,7 +82,6 @@ func testAddress(t *testing.T) string {
 // leaves a.gate nil when false, as when the server is stopped.
 func newUI(t *testing.T, withGate bool, hosts []state.Host, connectors ...connector.Connector) *uiEnv {
 	t.Helper()
-	testharness.IsolateUserDirs(t)
 	if err := registerFonts(); err != nil {
 		t.Fatal(err)
 	}

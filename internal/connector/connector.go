@@ -34,6 +34,9 @@ type Connector interface {
 	Listen() error
 	// StopListening turns the service off.
 	StopListening() error
+	// Healthy reports whether the service is on and still able to serve. It
+	// is false while the service is off.
+	Healthy() bool
 	// ServerServe adds the service to sv. Called only while ServerEnabled is true.
 	ServerServe(sv *ServerServices)
 }
@@ -61,6 +64,10 @@ func (s *ServerSwitch) Listen() error { s.on.Store(true); return nil }
 
 // StopListening turns the service off.
 func (s *ServerSwitch) StopListening() error { s.on.Store(false); return nil }
+
+// Healthy is true while the service is on. A connector that depends on
+// something outside Mochi overrides it.
+func (s *ServerSwitch) Healthy() bool { return s.on.Load() }
 
 // SettingKey is the settings key a connector's server-side switch is saved under.
 func SettingKey(c Connector) string {
