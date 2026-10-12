@@ -19,8 +19,7 @@ Mochi notices, it opens
 **System Settings → Privacy & Security → Full Disk Access** for you to turn
 Mochi on there. It asks once per run, for SSH and WebDAV together. The tile
 returns to normal within a few seconds of granting it.
-The grant lasts across installs only if each build is signed with the same
-identity; see [Install](INSTALL.md#platform-notes).
+An unsigned `Mochi.app` that is replaced loses the grant, so grant it again.
 
 Only Mochi hosts serve WebDAV.
 
