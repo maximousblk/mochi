@@ -135,6 +135,12 @@ CREATE TABLE IF NOT EXISTS certs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     cert BLOB NOT NULL UNIQUE
 );
+CREATE TABLE IF NOT EXISTS received_texts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sender TEXT NOT NULL,
+    body TEXT NOT NULL,
+    received_at INTEGER NOT NULL
+);
 `)
 	return err
 }

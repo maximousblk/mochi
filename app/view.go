@@ -25,6 +25,7 @@ func (a *app) view(c *ui.Context) {
 				if ui.PrimaryButton(c, "+  Add host").Clicked() {
 					a.addingHost = true
 					a.showSettings = false
+					a.showInbox = false
 				}
 				ui.Text(c, "Hosts").FontWeight(600).TextColor(theme.TextMuted).SingleLine()
 				ui.Scroll(c).Grow(1).Gap(6).AlignItems(ui.Stretch).Children(func() {
@@ -43,12 +44,17 @@ func (a *app) view(c *ui.Context) {
 							a.selectedHost = host.Address
 							a.showSettings = false
 							a.addingHost = false
+							a.showInbox = false
 						}
 					}
 				})
+				if ui.Button(c, a.inboxLabel()).Clicked() {
+					a.openInbox()
+				}
 				if ui.Button(c, "⚙  Settings").Clicked() {
 					a.showSettings = true
 					a.addingHost = false
+					a.showInbox = false
 				}
 			})
 
@@ -59,6 +65,8 @@ func (a *app) view(c *ui.Context) {
 						a.settingsView(c)
 					case a.addingHost:
 						a.addHostView(c)
+					case a.showInbox:
+						a.inboxView(c)
 					default:
 						a.hostView(c)
 					}
@@ -222,7 +230,7 @@ func (a *app) settingsView(c *ui.Context) {
 	})
 	ui.Text(c, "Connectors").FontSize(18).Bold()
 	ui.Row(c).Gap(12).Children(func() {
-		for _, lc := range a.connectors {
+		for _, lc := range a.servers {
 			on := a.serving[lc.Name()]
 			warn := on && a.unhealthy[lc.Name()]
 			tip := "Let other machines use " + lc.Name()

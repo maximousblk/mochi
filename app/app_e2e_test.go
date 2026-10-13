@@ -19,6 +19,7 @@ import (
 	"github.com/ashwin-y/mochi/internal/connector"
 	"github.com/ashwin-y/mochi/internal/state"
 	"github.com/ashwin-y/mochi/internal/testharness"
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/tailscale/tailcat"
 	"tailscale.com/tailcfg"
@@ -78,6 +79,8 @@ func newNode(t *testing.T, name, dir string, relay *tailcfg.DERPRegion, trusted 
 		runOnUI:  func(fn func()) { n.q <- fn },
 		openPath: func(p string) error { n.opened = append(n.opened, p); return nil },
 		copyText: func(s string) { n.copied = s },
+		// No desktop notifications in tests; the Inbox still gets the text.
+		notify: func(mygo.NotificationOptions) error { return nil },
 		serveExtra: func(port uint16) func(net.Conn) {
 			switch port {
 			case 9000:
@@ -430,6 +433,21 @@ func TestApplication(t *testing.T) {
 		}
 		alice.until("the dialog to close", 5*time.Second, func() bool { return !alice.exact("Send text to lab") })
 		host.until("the text to arrive", 10*time.Second, func() bool { return host.sentTo(9000) == "hello" })
+	})
+
+	step("the host's Send text switch puts alice's text in the host's Inbox", func(t *testing.T) {
+		host.settings()
+		host.click("Send text launcher")
+		if !host.app.serving["Send text"] {
+			t.Fatal("the Send text switch is not on")
+		}
+		status := alice.sendText("1", "to the inbox", time.Minute)
+		if !strings.HasPrefix(status, "Sent ") {
+			t.Fatalf("status = %q", status)
+		}
+		host.until("the text in the Inbox", 10*time.Second, func() bool { return len(host.app.inbox) == 1 })
+		host.click(host.app.inboxLabel())
+		host.want("Inbox", "to the inbox")
 	})
 
 	step("the SSH launcher tunnels to the host's SSH server and copies the command that reaches it", func(t *testing.T) {

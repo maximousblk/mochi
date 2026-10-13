@@ -14,18 +14,14 @@ import (
 	"github.com/tailscale/tailcat"
 )
 
-// Connector is a launcher.
-type Connector interface {
+// Server is a launcher's server side: the Tailcat port this machine serves for
+// the launcher, and the switch that turns it on or off.
+type Server interface {
 	// Name is the launcher's label, such as "SSH". Its lowercase form is part
 	// of the settings key that stores the server-side switch (SettingKey).
 	Name() string
 	// Icon is drawn on the launcher's tile.
 	Icon() *ui.SVG
-
-	// Connect opens a client to host and does the launcher's hand-off, such as
-	// copying a command or opening a folder. If it fails, nothing is left
-	// running.
-	Connect(host state.Host) (Client, error)
 
 	// Listen turns the server side on. If it fails, the server side stays off
 	// and the error says why. It is called when the user turns it on, and at
@@ -41,6 +37,17 @@ type Connector interface {
 	Healthy() bool
 }
 
+// Connector is a launcher with a client side as well: it can open a connection
+// to a host of its own.
+type Connector interface {
+	Server
+
+	// Connect opens a client to host and does the launcher's hand-off, such as
+	// copying a command or opening a folder. If it fails, nothing is left
+	// running.
+	Connect(host state.Host) (Client, error)
+}
+
 // Client is a launcher's connection to one host.
 type Client interface {
 	// LastUsed is the last time data moved through the client. It is time.Now()
@@ -50,8 +57,8 @@ type Client interface {
 	Disconnect() error
 }
 
-// SettingKey is the settings key a connector's server-side switch is saved under.
-func SettingKey(c Connector) string {
+// SettingKey is the settings key a launcher's server-side switch is saved under.
+func SettingKey(c Server) string {
 	return "connector_server:" + strings.ToLower(c.Name())
 }
 

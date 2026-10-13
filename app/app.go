@@ -19,6 +19,7 @@ import (
 	"github.com/ashwin-y/mochi/internal/connector"
 	"github.com/ashwin-y/mochi/internal/connector/rustdesk"
 	"github.com/ashwin-y/mochi/internal/connector/ssh"
+	"github.com/ashwin-y/mochi/internal/connector/textsender"
 	"github.com/ashwin-y/mochi/internal/connector/webdav"
 	"github.com/ashwin-y/mochi/internal/server"
 	"github.com/ashwin-y/mochi/internal/state"
@@ -55,10 +56,18 @@ type app struct {
 	store         *state.StateStore
 	lastTrayClick time.Time // when the tray icon was last clicked, for double clicks
 	connectors    []connector.Connector
-	ports         *connector.Ports
-	window        *mygo.Window
-	tray          *mygo.Tray
-	quitting      bool
+	// servers is every launcher's server side, in the order Settings shows
+	// them: the connectors, then the Send text receiver.
+	servers  []connector.Server
+	ports    *connector.Ports
+	window   *mygo.Window
+	tray     *mygo.Tray
+	quitting bool
+
+	// inbox is the saved texts, newest first, as the Inbox page shows them.
+	// showInbox is the Inbox page, which like Settings replaces the host view.
+	inbox     []state.ReceivedText
+	showInbox bool
 
 	// serving is each launcher's server-side switch, by name, as the app last
 	// set it. connections holds the clients open now, by host address and then
@@ -77,10 +86,11 @@ type app struct {
 
 	// Seams for tests; all nil in the real app.
 	runOnUI    func(func())
-	relay      *tailcfg.DERPRegion              // serve through this relay instead of picking a public one
-	openPath   func(string) error               // opens a folder; mygo.Shell.OpenPath when nil
-	serveExtra func(port uint16) func(net.Conn) // more ports for the server to serve
-	copyText   func(string)                     // copies text; mygo's clipboard when nil
+	relay      *tailcfg.DERPRegion                  // serve through this relay instead of picking a public one
+	openPath   func(string) error                   // opens a folder; mygo.Shell.OpenPath when nil
+	serveExtra func(port uint16) func(net.Conn)     // more ports for the server to serve
+	copyText   func(string)                         // copies text; mygo's clipboard when nil
+	notify     func(mygo.NotificationOptions) error // shows a notification; mygo's when nil
 }
 
 // Run starts the app and blocks until it exits. args are the command-line
@@ -154,6 +164,9 @@ func Run(args []string) error {
 		go a.watchIdle()
 	})
 	mygo.App.OnWindowAllClosed(func() {})
+	// The click is registered before Run so that a click which launches the app
+	// is delivered too.
+	mygo.App.OnNotificationClick(a.notificationClicked)
 	return mygo.App.Run()
 }
 
@@ -182,6 +195,13 @@ func (a *app) load(store *state.StateStore) (err error) {
 	a.connections = map[string]map[string]connector.Client{}
 	a.connectors = newConnectors(a.ports, a.identity.Seed(), a.copyToClipboard, a.dialing)
 	for _, c := range a.connectors {
+		a.servers = append(a.servers, c)
+	}
+	a.servers = append(a.servers, textsender.NewReceiver(a.ports, textSenderIcon, a.canNotify, a.receiveText))
+	if a.inbox, err = store.ReceivedTexts(); err != nil {
+		return fmt.Errorf("loading inbox: %w", err)
+	}
+	for _, c := range a.servers {
 		on, err := store.BoolSetting(connector.SettingKey(c))
 		switch {
 		case err == nil && on:
@@ -241,7 +261,7 @@ const healthCheckInterval = 5 * time.Second
 // off the UI thread.
 func (a *app) unhealthyNow() map[string]bool {
 	bad := map[string]bool{}
-	for _, c := range a.connectors {
+	for _, c := range a.servers {
 		if !c.Healthy() {
 			bad[c.Name()] = true
 		}
@@ -268,7 +288,7 @@ func (a *app) watchHealth() {
 }
 
 // toggleServing turns a launcher's server side on or off, and saves its switch.
-func (a *app) toggleServing(lc connector.Connector) {
+func (a *app) toggleServing(lc connector.Server) {
 	on := a.serving[lc.Name()]
 	var err error
 	if on {
@@ -343,6 +363,7 @@ func (a *app) addHost() {
 	a.selectedHost = a.addrDraft
 	a.addingHost = false
 	a.showSettings = false
+	a.showInbox = false
 	a.nameDraft, a.addrDraft = "", ""
 	if err := a.store.AddHost(a.hosts[len(a.hosts)-1]); err != nil {
 		a.status = fmt.Sprintf("Host added, but save failed: %v", err)

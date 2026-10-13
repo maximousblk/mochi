@@ -14,7 +14,7 @@ and rough edges.
 - Per-host launchers:
   - **SSH**: a tunnel to the host's SSH server, and the `ssh` command for it ([SSH](SSH.md)).
   - **WebDAV**: mount a Mochi host's files in Explorer or Finder ([WebDAV](WEBDAV.md)).
-  - **Send text**: send typed text to a host's TCP port.
+  - **Send text**: send text to a host's Inbox, and receive it from stock `tailcat` ([Send text](SEND_TEXT.md)).
   - **RustDesk**: forward a host's RustDesk direct-IP port ([RustDesk](RUSTDESK.md)).
 - Startup settings from an embedded `bootstrap.json` ([Bootstrap](BOOTSTRAP.md)).
 

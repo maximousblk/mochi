@@ -1,6 +1,7 @@
 // Package textsender sends typed text to a TCP port on a Tailcat host, the way
-// netcat sends stdin. It is a one-shot action rather than a toggled connector,
-// so it has no enabled state.
+// netcat sends stdin. Sending is a one-shot action. Receiving is the server side
+// of the same port: Receiver accepts raw text on DefaultPort and hands it to the
+// app, so stock tailcat's `echo hello | tailcat <address>` lands there.
 package textsender
 
 import (

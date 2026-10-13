@@ -45,6 +45,10 @@ Coverage numbers are a diagnostic, not a goal.
 | RustDesk server side is healthy only while direct IP is on | `internal/connector/rustdesk/listen_test.go` |
 | A listening but unhealthy launcher tile stays on and is yellow | `app/health_test.go` |
 | Send text delivers the exact bytes to a host port | `internal/connector/textsender/send_test.go` |
+| Send text receiver gets a text over a tunnel, truncates at 64 KiB, and is healthy only while listening and able to notify | `internal/connector/textsender/receiver_test.go` |
+| Received texts are newest first, pruned to 100, and deletable one at a time | `internal/state/received_texts_test.go` |
+| A received text is notified, listed in the Inbox, copied, deleted, and opens the Inbox on click | `app/ui_test.go` |
+| A text sent to a host's Send text port lands in the host's Inbox | `app/app_e2e_test.go` |
 | Persistent state: hosts, settings, identity, migrations | `internal/state/state_test.go` |
 
 ## Running

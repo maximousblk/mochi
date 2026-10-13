@@ -53,7 +53,7 @@ starts the window in `app/`.
 | `internal/connector/ssh/` | SSH launcher: serves `sshserver` on port 22022, and tunnels to a host's SSH |
 | `internal/connector/webdav/` | WebDAV launcher: serves the home volume, and mounts a host's share through a tunnel |
 | `internal/connector/rustdesk/` | RustDesk launcher: direct-IP forward, and the RustDesk client on a tunnel |
-| `internal/connector/textsender/` | Send-text protocol |
+| `internal/connector/textsender/` | Send text: the sender, and the receiver on port 1 that saves texts |
 | `mygo.json` | MyGo app metadata; its icon is `app/resources/icon.png` |
 
 ## Conventions

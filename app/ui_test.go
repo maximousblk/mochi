@@ -4,7 +4,9 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"image/color"
+	"net"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,7 +14,9 @@ import (
 
 	"github.com/ashwin-y/mochi/internal/admission"
 	"github.com/ashwin-y/mochi/internal/connector"
+	"github.com/ashwin-y/mochi/internal/connector/textsender"
 	"github.com/ashwin-y/mochi/internal/state"
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"github.com/tailscale/tailcat"
 	"tailscale.com/types/key"
@@ -101,6 +105,10 @@ func newUI(t *testing.T, withGate bool, hosts []state.Host, connectors ...connec
 		}},
 		connectors: connectors,
 	}
+	for _, c := range connectors {
+		a.servers = append(a.servers, c)
+	}
+	a.servers = append(a.servers, textsender.NewReceiver(a.ports, textSenderIcon, a.canNotify, a.receiveText))
 	e := &uiEnv{t: t, app: a}
 	if withGate {
 		extPub, _, _ := ed25519.GenerateKey(nil)
@@ -639,4 +647,61 @@ func TestUIBlockedRowsOfferOnlyApprove(t *testing.T) {
 	if approves != 1 || blocks != 0 {
 		t.Fatalf("approve buttons=%d block buttons=%d; want 1 and 0", approves, blocks)
 	}
+}
+
+// A text received on the port is saved, shown in a notification, and listed in
+// the Inbox, where it can be copied and deleted. Clicking its notification
+// opens the Inbox.
+func TestUIReceivedTextInbox(t *testing.T) {
+	e := newUI(t, false, nil)
+	// The receive path queues its UI work here, and the test runs it on its own
+	// goroutine, as the view does.
+	queue := make(chan func(), 16)
+	e.app.runOnUI = func(fn func()) { queue <- fn }
+	notes := make(chan mygo.NotificationOptions, 4)
+	e.app.notify = func(o mygo.NotificationOptions) error {
+		notes <- o
+		return nil
+	}
+	pump := func(until func() bool) {
+		t.Helper()
+		deadline := time.After(5 * time.Second)
+		for !until() {
+			select {
+			case fn := <-queue:
+				fn()
+			case <-deadline:
+				t.Fatal("timed out waiting for the app")
+			}
+		}
+	}
+
+	const body = "hello from alice"
+	from := &net.TCPAddr{IP: net.IPv4(100, 64, 0, 9), Port: 4000}
+	e.app.receiveText(textsender.Text{From: from, Body: body})
+	pump(func() bool { return len(e.app.inbox) == 1 })
+
+	note := <-notes
+	if want := fmt.Sprintf("mochi-text:%d", e.app.inbox[0].ID); note.ID != want {
+		t.Fatalf("notification ID %q, want %q", note.ID, want)
+	}
+	if note.Title != "Text from 100.64.0.9:4000" || note.Body != body {
+		t.Fatalf("notification %q / %q, want the sender and the text", note.Title, note.Body)
+	}
+
+	e.app.notificationClicked(note.ID)
+	pump(func() bool { return e.app.showInbox })
+	e.tt.Frame()
+	e.want("Inbox", "100.64.0.9:4000", body)
+
+	e.click("Copy text")
+	if got := e.tt.Clipboard(); got != body {
+		t.Fatalf("clipboard = %q, want %q", got, body)
+	}
+
+	e.click("Delete text")
+	if len(e.app.inbox) != 0 {
+		t.Fatalf("%d texts left after delete", len(e.app.inbox))
+	}
+	e.wantNot(body)
 }
