@@ -49,3 +49,19 @@ it refuses the others before any request reaches the share.
 
 Errors are written to `webdav.log` beside `mochi.db`. Start Mochi with
 `--verbose` to log every request and its status. See [State](STATE.md#logs).
+
+## Settings
+
+Right-click the WebDAV tile and choose **Configure…**. On the Settings page this
+edits this machine's server; on a host's page it edits that host's client.
+
+Server fields (Settings page):
+
+- **Tailcat port** (`port`), default `8080`: the port the WebDAV server serves.
+- **Shared folder** (`folder`), default the home volume root: the folder served.
+  It must be an existing directory.
+
+Client fields (host page, saved per host):
+
+- **Host's WebDAV port** (`port`), default `8080`: the port the tunnel dials on
+  the host.

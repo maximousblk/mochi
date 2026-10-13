@@ -42,6 +42,7 @@ type app struct {
 	sendBody      string
 	sendPort      string
 	sendBusy      bool
+	config        configForm
 	serverAddr    string
 	serverEnabled bool
 	serverBusy    bool
@@ -205,7 +206,7 @@ func (a *app) load(store *state.StateStore) (err error) {
 		on, err := store.BoolSetting(connector.SettingKey(c))
 		switch {
 		case err == nil && on:
-			if err := c.Listen(); err != nil {
+			if err := c.Listen(a.configFor(connector.ServerConfigKey(c), c.Name(), c.ServerFields())); err != nil {
 				a.status = c.Name() + " server not started: " + err.Error()
 			} else {
 				a.serving[c.Name()] = true
@@ -294,7 +295,7 @@ func (a *app) toggleServing(lc connector.Server) {
 	if on {
 		err = lc.Stop()
 	} else {
-		err = lc.Listen()
+		err = lc.Listen(a.configFor(connector.ServerConfigKey(lc), lc.Name(), lc.ServerFields()))
 	}
 	if err != nil {
 		a.status = lc.Name() + " server not changed: " + err.Error()
@@ -383,6 +384,9 @@ func (a *app) removeHost(index int) error {
 	}
 	if err := a.store.DeleteHost(host.Address); err != nil {
 		return fmt.Errorf("delete host from state: %w", err)
+	}
+	if err := a.deleteClientConfigs(host.Address); err != nil {
+		return err
 	}
 	a.hosts = append(a.hosts[:index], a.hosts[index+1:]...)
 	if a.selectedHost == host.Address {

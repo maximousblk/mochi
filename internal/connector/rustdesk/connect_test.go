@@ -30,7 +30,7 @@ func TestConnectTunnelsDirectIPAndLaunchesRustDesk(t *testing.T) {
 	host := state.Host{Name: "lab", Address: testharness.Address(server)}
 	c := New(connector.NewPorts(), nil, admission.Dialing{Key: key.NewNode()})
 
-	client, err := c.Connect(host)
+	client, err := c.Connect(host, connector.Config{"port": fmt.Sprint(DirectPort)})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestConnectRefusesHostWithDirectIPOff(t *testing.T) {
 	host := state.Host{Name: "lab", Address: testharness.Address(server)}
 	c := New(connector.NewPorts(), nil, admission.Dialing{Key: key.NewNode()})
 
-	client, err := c.Connect(host)
+	client, err := c.Connect(host, connector.Config{"port": fmt.Sprint(DirectPort)})
 	if err == nil || !strings.Contains(err.Error(), "does not accept RustDesk direct IP") {
 		t.Fatalf("connect error = %v; want the direct-IP refusal", err)
 	}
@@ -113,7 +113,7 @@ func TestConnectDisconnectsWhenRustDeskCannotStart(t *testing.T) {
 	}
 	c := New(connector.NewPorts(), nil, admission.Dialing{Key: key.NewNode()})
 
-	client, err := c.Connect(host)
+	client, err := c.Connect(host, connector.Config{"port": fmt.Sprint(DirectPort)})
 	if err == nil || !strings.Contains(err.Error(), "start RustDesk") {
 		t.Fatalf("connect error = %v; want the launch failure", err)
 	}

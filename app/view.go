@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/ashwin-y/mochi/internal/connector"
+	"github.com/ashwin-y/mochi/internal/connector/textsender"
 	"github.com/ashwin-y/mochi/internal/state"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -77,6 +78,7 @@ func (a *app) view(c *ui.Context) {
 			})
 		})
 	})
+	a.configDialog(c)
 }
 
 func (a *app) addHostView(c *ui.Context) {
@@ -145,11 +147,16 @@ func (a *app) hostView(c *ui.Context) {
 	ui.Row(c).Gap(12).Children(func() {
 		for _, lc := range a.connectors {
 			_, connected := a.connections[host.Address][lc.Name()]
-			if launcherTile(c, lc.Name(), "Toggle "+lc.Name()+" connector", lc.Icon(), connected, false).Clicked() {
+			if launcherTile(c, lc.Name(), "Toggle "+lc.Name()+" connector", lc.Icon(), connected, false, func() {
+				a.openConfig(clientTarget(lc.Name(), *host, lc.ClientFields()))
+			}).Clicked() {
 				a.toggleConnection(*host, lc)
 			}
 		}
-		if launcherTile(c, "Send text", "Send text to this host", textSenderIcon, false, false).Clicked() {
+		if launcherTile(c, "Send text", "Send text to this host", textSenderIcon, false, false, func() {
+			a.openConfig(clientTarget("Send text", *host, textsender.ClientFields()))
+		}).Clicked() {
+			a.sendPort = a.configFor(connector.ClientConfigKey("Send text", host.Address), "Send text", textsender.ClientFields())["port"]
 			a.sendOpen = true
 		}
 	})
@@ -157,8 +164,9 @@ func (a *app) hostView(c *ui.Context) {
 }
 
 // launcherTile is a square launcher: accent-filled while enabled, and yellow
-// while enabled but not working (warn).
-func launcherTile(c *ui.Context, name, tooltip string, icon *ui.SVG, enabled, warn bool) ui.Element {
+// while enabled but not working (warn). Its right-click menu has a Configure…
+// item that calls configure.
+func launcherTile(c *ui.Context, name, tooltip string, icon *ui.SVG, enabled, warn bool, configure func()) ui.Element {
 	theme := c.Theme()
 	fill, text := theme.Accent, theme.AccentText
 	if warn {
@@ -178,7 +186,11 @@ func launcherTile(c *ui.Context, name, tooltip string, icon *ui.SVG, enabled, wa
 			}
 		})
 	})
-	return tile
+	return tile.ContextMenu(func(m *ui.Menu) {
+		if m.Item("Configure…").Chosen() {
+			configure()
+		}
+	})
 }
 
 func (a *app) copyButton(c *ui.Context, value, label string) {
@@ -234,7 +246,9 @@ func (a *app) settingsView(c *ui.Context) {
 			on := a.serving[lc.Name()]
 			warn := on && a.unhealthy[lc.Name()]
 			tip := "Let other machines use " + lc.Name()
-			if launcherTile(c, lc.Name(), tip, lc.Icon(), on, warn).Clicked() {
+			if launcherTile(c, lc.Name(), tip, lc.Icon(), on, warn, func() {
+				a.openConfig(serverTarget(lc))
+			}).Clicked() {
 				a.toggleServing(lc)
 			}
 		}

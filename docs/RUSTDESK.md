@@ -32,3 +32,19 @@ says it is not installed, and nothing is opened.
 Clicking the RustDesk launcher again, removing the host, or quitting Mochi closes
 the tunnel. So does six hours without data moving through it. Nothing is written
 to disk.
+
+## Settings
+
+Right-click the RustDesk tile and choose **Configure…**. On the Settings page
+this edits this machine's server; on a host's page it edits that host's client.
+
+Server fields (Settings page):
+
+- **Tailcat port** (`port`), default `21118`: the port the server serves.
+- **RustDesk direct IP port** (`local_port`), default `21118`: the local port the
+  server forwards to, and the port Mochi probes for health.
+
+Client field (host page, saved per host):
+
+- **Host's RustDesk port** (`port`), default `21118`: the port the tunnel dials
+  on the host.

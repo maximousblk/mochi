@@ -3,6 +3,7 @@ package textsender
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -19,7 +20,7 @@ func TestReceiverDeliversSentText(t *testing.T) {
 	ports := connector.NewPorts()
 	got := make(chan Text, 1)
 	r := NewReceiver(ports, nil, func() bool { return true }, func(text Text) { got <- text })
-	if err := r.Listen(); err != nil {
+	if err := r.Listen(connector.Config{"port": fmt.Sprint(DefaultPort)}); err != nil {
 		t.Fatal(err)
 	}
 	host := testharness.HostFunc(t, relay, ports.Handler)
@@ -41,7 +42,7 @@ func TestReceiverTruncatesLongText(t *testing.T) {
 	ports := connector.NewPorts()
 	got := make(chan Text, 1)
 	r := NewReceiver(ports, nil, func() bool { return true }, func(text Text) { got <- text })
-	if err := r.Listen(); err != nil {
+	if err := r.Listen(connector.Config{"port": fmt.Sprint(DefaultPort)}); err != nil {
 		t.Fatal(err)
 	}
 	host := testharness.HostFunc(t, relay, ports.Handler)
@@ -68,7 +69,7 @@ func TestReceiverHealthyOnlyWhileListeningAndNotifying(t *testing.T) {
 	if r.Healthy() {
 		t.Fatal("healthy before Listen")
 	}
-	if err := r.Listen(); err != nil {
+	if err := r.Listen(connector.Config{"port": fmt.Sprint(DefaultPort)}); err != nil {
 		t.Fatal(err)
 	}
 	if !r.Healthy() {

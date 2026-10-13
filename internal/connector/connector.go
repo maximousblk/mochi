@@ -23,10 +23,14 @@ type Server interface {
 	// Icon is drawn on the launcher's tile.
 	Icon() *ui.SVG
 
-	// Listen turns the server side on. If it fails, the server side stays off
-	// and the error says why. It is called when the user turns it on, and at
-	// startup for each launcher that was left on.
-	Listen() error
+	// ServerFields describes the settings of the server side. The user edits
+	// them in the Configure dialog on the Settings page.
+	ServerFields() []Field
+	// Listen turns the server side on with cfg, which is already resolved
+	// against ServerFields. If it fails, the server side stays off and the error
+	// says why. It is called when the user turns it on, and at startup for each
+	// launcher that was left on.
+	Listen(cfg Config) error
 	// Stop turns the server side off. Connections already open are not closed.
 	Stop() error
 	// Healthy reports whether the server side is on and able to serve right
@@ -42,10 +46,12 @@ type Server interface {
 type Connector interface {
 	Server
 
-	// Connect opens a client to host and does the launcher's hand-off, such as
-	// copying a command or opening a folder. If it fails, nothing is left
-	// running.
-	Connect(host state.Host) (Client, error)
+	// ClientFields describes the per-host settings of the client side.
+	ClientFields() []Field
+	// Connect opens a client to host with cfg, which is already resolved against
+	// ClientFields, and does the launcher's hand-off, such as copying a command
+	// or opening a folder. If it fails, nothing is left running.
+	Connect(host state.Host, cfg Config) (Client, error)
 }
 
 // Client is a launcher's connection to one host.
@@ -60,6 +66,18 @@ type Client interface {
 // SettingKey is the settings key a launcher's server-side switch is saved under.
 func SettingKey(c Server) string {
 	return "connector_server:" + strings.ToLower(c.Name())
+}
+
+// ServerConfigKey is the settings key a launcher's server-side config is saved under.
+func ServerConfigKey(c Server) string {
+	return "connector_config:server:" + strings.ToLower(c.Name())
+}
+
+// ClientConfigKey is the settings key a launcher's client config for one host is
+// saved under. The host address is part of the key because each host has its own
+// settings.
+func ClientConfigKey(name, hostAddress string) string {
+	return "connector_config:client:" + strings.ToLower(name) + ":" + hostAddress
 }
 
 // ParseHost decodes a host's Tailcat address.

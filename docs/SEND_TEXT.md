@@ -46,3 +46,18 @@ On a host's page, the **Send text** tile opens a dialog. It sends the body to
 the host's port, which defaults to 1, and reports the outcome. A client must be
 approved by the host like any other connection, and a send to a host that has
 Send text off is not saved anywhere.
+
+## Settings
+
+Right-click the Send text tile and choose **Configure…**. On the Settings page
+this edits this machine's receiver; on a host's page it edits that host's
+client.
+
+Server field (Settings page):
+
+- **Tailcat port** (`port`), default `1`: the port the receiver listens on.
+
+Client field (host page, saved per host):
+
+- **Default port** (`port`), default `1`: the port the Send text dialog fills
+  in for that host. The dialog's Port box can still be changed per send.

@@ -248,6 +248,39 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, string(encoded))
 	return err
 }
 
+// Config returns the launcher config saved under key. A missing key is an empty
+// config, not an error, because a launcher that was never configured runs on its
+// defaults.
+func (s *StateStore) Config(key string) (map[string]string, error) {
+	var value string
+	err := s.db.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return map[string]string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var config map[string]string
+	if err := json.Unmarshal([]byte(value), &config); err != nil {
+		return nil, fmt.Errorf("decode config %q: %w", key, err)
+	}
+	if config == nil {
+		config = map[string]string{}
+	}
+	return config, nil
+}
+
+// SetConfig saves the launcher config under key, replacing what was saved.
+func (s *StateStore) SetConfig(key string, config map[string]string) error {
+	encoded, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`INSERT INTO settings(key, value) VALUES (?, ?)
+ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, string(encoded))
+	return err
+}
+
 // Identity returns this machine's identity, creating it on first use. The seed
 // is kept in the state database; a keychain is planned. Installs from before
 // identities existed had a random client key that cannot become a seed, so

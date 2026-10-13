@@ -28,7 +28,8 @@ func (a *app) toggleConnection(host state.Host, lc connector.Connector) {
 		}
 		return
 	}
-	client, err := lc.Connect(host)
+	cfg := a.configFor(connector.ClientConfigKey(name, host.Address), name, lc.ClientFields())
+	client, err := lc.Connect(host, cfg)
 	if err != nil {
 		a.status = name + " connector failed: " + err.Error()
 		return

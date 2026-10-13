@@ -25,7 +25,8 @@ func TestHealthyFollowsDirectIPPort(t *testing.T) {
 	if c.Healthy() {
 		t.Fatal("healthy while the server side is off")
 	}
-	if err := c.Listen(); err != nil {
+	cfg := connector.Config{"port": fmt.Sprint(DirectPort), "local_port": fmt.Sprint(DirectPort)}
+	if err := c.Listen(cfg); err != nil {
 		t.Fatalf("Listen with direct IP off: %v", err)
 	}
 	if !ports.Registered(DirectPort) {

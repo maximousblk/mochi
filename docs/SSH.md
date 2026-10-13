@@ -61,3 +61,19 @@ machine refuses the tunnel, and the `ssh` command then fails to connect.
 Clicking the SSH launcher again, removing the host, or quitting Mochi closes the
 tunnel. Mochi also closes it once six hours pass without data moving through it.
 A connection that is still open counts as in use.
+
+## Settings
+
+Right-click the SSH tile and choose **Configure…**. On the Settings page this
+edits this machine's server; on a host's page it edits that host's client.
+
+Server fields (Settings page):
+
+- **Tailcat port** (`port`), default `22022`: the port the SSH server serves.
+
+Client fields (host page, saved per host):
+
+- **Host's SSH port** (`port`), default `22022`: the port the tunnel dials on
+  the host.
+- **User name** (`user`), default empty: the account put before `127.0.0.1` in
+  the copied command. Empty leaves the choice to `ssh`.

@@ -38,7 +38,13 @@ type toggleConnector struct {
 
 func (c *toggleConnector) Name() string  { return c.name }
 func (c *toggleConnector) Icon() *ui.SVG { return webdavIcon }
-func (c *toggleConnector) Connect(state.Host) (connector.Client, error) {
+func (c *toggleConnector) ServerFields() []connector.Field {
+	return []connector.Field{{Key: "port", Label: "Tailcat port", Default: "9000", Check: connector.CheckPort}}
+}
+func (c *toggleConnector) ClientFields() []connector.Field {
+	return []connector.Field{{Key: "port", Label: "Host's port", Default: "9000", Check: connector.CheckPort}}
+}
+func (c *toggleConnector) Connect(state.Host, connector.Config) (connector.Client, error) {
 	c.connects++
 	if c.enableErr != nil {
 		return nil, c.enableErr
@@ -47,9 +53,9 @@ func (c *toggleConnector) Connect(state.Host) (connector.Client, error) {
 	c.clients = append(c.clients, fc)
 	return fc, nil
 }
-func (c *toggleConnector) Listen() error { return nil }
-func (c *toggleConnector) Stop() error   { return nil }
-func (c *toggleConnector) Healthy() bool { return true }
+func (c *toggleConnector) Listen(connector.Config) error { return nil }
+func (c *toggleConnector) Stop() error                   { return nil }
+func (c *toggleConnector) Healthy() bool                 { return true }
 
 // uiEnv is the app under test with its state in a temporary database, and the
 // tester that drives its view.

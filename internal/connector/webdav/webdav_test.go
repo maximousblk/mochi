@@ -29,6 +29,11 @@ func newRoot(t *testing.T) string {
 	return root
 }
 
+// serverConfig is the resolved server config that shares root on ServePort.
+func serverConfig(root string) connector.Config {
+	return connector.Config{"port": strconv.Itoa(int(ServePort)), "folder": root}
+}
+
 func doHTTP(t *testing.T, method, target, body string, header map[string]string) (int, string) {
 	t.Helper()
 	req, err := http.NewRequest(method, target, strings.NewReader(body))
@@ -79,8 +84,8 @@ func checkShare(t *testing.T, base, root string) {
 func TestShareOverTailcatTunnel(t *testing.T) {
 	root := newRoot(t)
 	hostPorts := connector.NewPorts()
-	host := newConnector(hostPorts, nil, nil, admission.Dialing{}, root, t.Logf)
-	if err := host.Listen(); err != nil {
+	host := newConnector(hostPorts, nil, nil, admission.Dialing{}, t.Logf)
+	if err := host.Listen(serverConfig(root)); err != nil {
 		t.Fatal(err)
 	}
 	server := testharness.HostFunc(t, testharness.Relay(t), hostPorts.Handler)
@@ -102,15 +107,15 @@ func TestConnectCopiesTheShareAddress(t *testing.T) {
 	}
 	root := newRoot(t)
 	hostPorts := connector.NewPorts()
-	host := newConnector(hostPorts, nil, nil, admission.Dialing{}, root, t.Logf)
-	if err := host.Listen(); err != nil {
+	host := newConnector(hostPorts, nil, nil, admission.Dialing{}, t.Logf)
+	if err := host.Listen(serverConfig(root)); err != nil {
 		t.Fatal(err)
 	}
 	server := testharness.HostFunc(t, testharness.Relay(t), hostPorts.Handler)
 
 	var copied string
-	c := newConnector(connector.NewPorts(), func(s string) { copied = s }, nil, admission.Dialing{Key: key.NewNode()}, "", t.Logf)
-	client, err := c.Connect(state.Host{Name: "lab", Address: testharness.Address(server)})
+	c := newConnector(connector.NewPorts(), func(s string) { copied = s }, nil, admission.Dialing{Key: key.NewNode()}, t.Logf)
+	client, err := c.Connect(state.Host{Name: "lab", Address: testharness.Address(server)}, connector.Config{"port": strconv.Itoa(int(ServePort))})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -126,17 +131,17 @@ func TestConnectCopiesTheShareAddress(t *testing.T) {
 // volume to serve.
 func TestListenServesOnlyWhileOn(t *testing.T) {
 	ports := connector.NewPorts()
-	if err := newConnector(ports, nil, nil, admission.Dialing{}, "", nil).Listen(); err == nil {
+	if err := newConnector(ports, nil, nil, admission.Dialing{}, t.Logf).Listen(serverConfig("")); err == nil {
 		t.Fatal("Listen succeeded with no home volume to serve")
 	}
 
-	c := newConnector(ports, nil, nil, admission.Dialing{}, newRoot(t), t.Logf)
+	c := newConnector(ports, nil, nil, admission.Dialing{}, t.Logf)
 	access := true
 	c.access = connector.NewDiskAccess(func() bool { return access }, func() {})
 	if c.Healthy() {
 		t.Fatal("healthy before Listen")
 	}
-	if err := c.Listen(); err != nil {
+	if err := c.Listen(serverConfig(newRoot(t))); err != nil {
 		t.Fatal(err)
 	}
 	if !ports.Registered(ServePort) || !c.Healthy() {

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/ashwin-y/mochi/internal/admission"
@@ -34,6 +35,17 @@ type Connector struct {
 	ports   *connector.Ports
 	icon    *ui.SVG
 	dialing admission.Dialing
+
+	mu      sync.Mutex
+	serving *listening // what Listen claimed; nil while the server is off
+}
+
+// listening is the server config that Listen claimed. Healthy probes the local
+// port it was started with, so a later change to the config cannot misreport the
+// running server.
+type listening struct {
+	port      uint16 // the Tailcat port served
+	localPort uint16 // the RustDesk port the forward dials on this machine
 }
 
 // New returns the RustDesk launcher. icon is its tile icon.
@@ -44,10 +56,45 @@ func New(ports *connector.Ports, icon *ui.SVG, dialing admission.Dialing) *Conne
 func (c *Connector) Name() string  { return "RustDesk" }
 func (c *Connector) Icon() *ui.SVG { return c.icon }
 
+// ServerFields are the settings of the RustDesk direct-IP forward on this
+// machine. The Tailcat port is what a host's clients dial, and the RustDesk port
+// is where RustDesk actually listens here.
+func (c *Connector) ServerFields() []connector.Field {
+	return []connector.Field{
+		{
+			Key:     "port",
+			Label:   "Tailcat port",
+			Default: fmt.Sprint(DirectPort),
+			Help:    "The port other Mochi clients dial to reach RustDesk here.",
+			Check:   connector.CheckPort,
+		},
+		{
+			Key:     "local_port",
+			Label:   "RustDesk direct IP port",
+			Default: fmt.Sprint(DirectPort),
+			Help:    "The port RustDesk listens on for direct IP here, as set in RustDesk.",
+			Check:   connector.CheckPort,
+		},
+	}
+}
+
+// ClientFields are the settings for reaching a host's RustDesk direct-IP port.
+func (c *Connector) ClientFields() []connector.Field {
+	return []connector.Field{
+		{
+			Key:     "port",
+			Label:   "Host's RustDesk port",
+			Default: fmt.Sprint(DirectPort),
+			Help:    "The Tailcat port the host serves RustDesk on.",
+			Check:   connector.CheckPort,
+		},
+	}
+}
+
 // Connect checks that the host accepts direct-IP connections, tunnels to its
 // direct-IP port, and launches RustDesk on the tunnel. If RustDesk cannot be
 // launched, the tunnel is closed and the error says so.
-func (c *Connector) Connect(host state.Host) (connector.Client, error) {
+func (c *Connector) Connect(host state.Host, cfg connector.Config) (connector.Client, error) {
 	exe, err := executable()
 	if err != nil {
 		return nil, err
@@ -56,17 +103,21 @@ func (c *Connector) Connect(host state.Host) (connector.Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	port, err := cfg.Port("port")
+	if err != nil {
+		return nil, err
+	}
 	client := c.dialing.Dialer(info.Addr())
 	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
-	conn, err := client.DialTCPPort(ctx, DirectPort)
+	conn, err := client.DialTCPPort(ctx, port)
 	cancel()
 	if err != nil {
 		client.Close()
-		return nil, fmt.Errorf("host does not accept RustDesk direct IP on port %d (enable direct IP access there, and make sure this client is allowed): %w", DirectPort, err)
+		return nil, fmt.Errorf("host does not accept RustDesk direct IP on port %d (enable direct IP access there, and make sure this client is allowed): %w", port, err)
 	}
 	conn.Close()
 
-	t, err := connector.OpenTunnel(client, DirectPort)
+	t, err := connector.OpenTunnel(client, port)
 	if err != nil {
 		return nil, err
 	}

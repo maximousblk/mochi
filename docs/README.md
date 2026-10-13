@@ -53,6 +53,12 @@ Then:
 - No keychain integration, signed releases or installers yet.
 - An approved client may use every service the server offers.
 
+## Launcher settings
+
+Right-click any launcher tile and choose **Configure…** to edit that launcher's
+settings. On the Settings page it edits this machine's server; on a host's page
+it edits that host's client. Each launcher's doc lists its fields.
+
 ## License
 
 Mochi is released under the MIT License; see [`LICENSE`](../LICENSE). Ioskeley

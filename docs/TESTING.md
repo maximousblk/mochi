@@ -49,6 +49,10 @@ Coverage numbers are a diagnostic, not a goal.
 | Received texts are newest first, pruned to 100, and deletable one at a time | `internal/state/received_texts_test.go` |
 | A received text is notified, listed in the Inbox, copied, deleted, and opens the Inbox on click | `app/ui_test.go` |
 | A text sent to a host's Send text port lands in the host's Inbox | `app/app_e2e_test.go` |
+| Launcher settings fill defaults, drop unknown keys, and report a failing check | `internal/connector/config_test.go`: `TestResolveCompletesDefaultsAndChecks` |
+| A port another launcher holds cannot be claimed | `internal/connector/ports_test.go`: `TestClaimRefusesHeldPort` |
+| Configure a serving launcher's port from Settings: it moves, and an invalid port changes nothing | `app/configure_test.go`: `TestUIConfigureServerPortRestartsServer`, `TestUIConfigureInvalidPortChangesNothing` |
+| Configure a host's launcher from its tile, and removing the host deletes that config | `app/configure_test.go`: `TestUIConfigureHostTileSavesAndRemoveDeletes` |
 | Persistent state: hosts, settings, identity, migrations | `internal/state/state_test.go` |
 
 ## Running

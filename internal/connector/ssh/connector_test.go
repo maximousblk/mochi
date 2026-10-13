@@ -25,7 +25,11 @@ func TestListenServesSSHUntilStop(t *testing.T) {
 	if c.Healthy() {
 		t.Fatal("healthy before Listen")
 	}
-	if err := c.Listen(); err != nil {
+	cfg, err := connector.Resolve(c.ServerFields(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Listen(cfg); err != nil {
 		t.Fatal(err)
 	}
 	if !ports.Registered(ServePort) || !c.Healthy() {
@@ -44,13 +48,20 @@ func TestListenServesSSHUntilStop(t *testing.T) {
 }
 
 // Through the tunnel the copied command names, a client reaches the host's SSH
-// server with the current account's user name and no credentials. The host
-// presents the key derived from its identity, and the account runs commands.
+// server on the port the host serves and the user the client configured, with no
+// credentials. The host presents the key derived from its identity, and the account
+// runs commands.
 func TestSSHOverTailcatThroughCopiedCommand(t *testing.T) {
+	const servePort = "22100"
+	me, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
 	hostSeed := state.NewIdentity().Seed()
 	hostPorts := connector.NewPorts()
 	host := New(hostPorts, hostSeed, nil, nil, admission.Dialing{})
-	if err := host.Listen(); err != nil {
+	hostCfg := connector.Config{"port": servePort}
+	if err := host.Listen(hostCfg); err != nil {
 		t.Fatal(err)
 	}
 	server := testharness.HostFunc(t, testharness.Relay(t), hostPorts.Handler)
@@ -58,7 +69,8 @@ func TestSSHOverTailcatThroughCopiedCommand(t *testing.T) {
 
 	var copied string
 	client := New(connector.NewPorts(), nil, func(s string) { copied = s }, nil, admission.Dialing{Key: key.NewNode()})
-	c, err := client.Connect(state.Host{Name: "lab", Address: address})
+	clientCfg := connector.Config{"port": servePort, "user": me.Username}
+	c, err := client.Connect(state.Host{Name: "lab", Address: address}, clientCfg)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -69,16 +81,12 @@ func TestSSHOverTailcatThroughCopiedCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := fmt.Sprintf("ssh -p %d -o HostKeyAlias=mochi-node-%s 127.0.0.1", port, info.ServerPublic.NodePublic.UntypedHexString())
+	want := fmt.Sprintf("ssh -p %d -o HostKeyAlias=mochi-node-%s %s@127.0.0.1", port, info.ServerPublic.NodePublic.UntypedHexString(), me.Username)
 	if copied != want {
 		t.Fatalf("copied %q, want %q", copied, want)
 	}
 
 	hostKey, err := sshserver.HostKey(hostSeed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	me, err := user.Current()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,7 @@
 package connector
 
 import (
+	"fmt"
 	"net"
 	"sync"
 )
@@ -18,11 +19,16 @@ func NewPorts() *Ports {
 	return &Ports{handlers: map[uint16]func(net.Conn){}}
 }
 
-// Register serves port with handler, replacing the handler it had.
-func (p *Ports) Register(port uint16, handler func(net.Conn)) {
+// Claim serves port with handler. It fails if another launcher already serves
+// port, because replacing that handler would silently cut the other launcher off.
+func (p *Ports) Claim(port uint16, handler func(net.Conn)) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.handlers[port] != nil {
+		return fmt.Errorf("port %d is already in use by another launcher", port)
+	}
 	p.handlers[port] = handler
+	return nil
 }
 
 // Unregister stops serving port. Connections already being handled continue.
