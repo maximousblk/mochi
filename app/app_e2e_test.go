@@ -157,7 +157,7 @@ func (n *node) until(what string, d time.Duration, cond func() bool) {
 			return
 		}
 		if time.Now().After(deadline) {
-			n.t.Fatalf("%s: gave up waiting for %s after %v\nstatus: %q\nvisible: %q", n.name, what, d, n.app.status, n.tt.Texts())
+			n.t.Fatalf("%s: gave up waiting for %s after %v\nstatus: %q\nvisible: %q", n.name, what, d, n.app.status.text, n.tt.Texts())
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -235,7 +235,7 @@ func (n *node) want(texts ...string) {
 	n.t.Helper()
 	for _, s := range texts {
 		if !n.has(s) {
-			n.t.Fatalf("%s: expected %q on screen\nstatus: %q\nvisible: %q", n.name, s, n.app.status, n.tt.Texts())
+			n.t.Fatalf("%s: expected %q on screen\nstatus: %q\nvisible: %q", n.name, s, n.app.status.text, n.tt.Texts())
 		}
 	}
 }
@@ -252,7 +252,7 @@ func (n *node) wantNot(texts ...string) {
 func (n *node) settings() {
 	n.t.Helper()
 	n.click("Settings")
-	n.want("Machine key")
+	n.want("Database")
 }
 
 // clientKey is the node key this Mochi dials with, as hosts see it.
@@ -315,7 +315,7 @@ func (n *node) addHost(name, addr string) {
 	n.typeInto("Host name", name)
 	n.typeInto("Tailcat address", addr)
 	n.click("Save host")
-	n.until("the host to be added", 5*time.Second, func() bool { return n.app.status == "Host added" })
+	n.until("the host to be added", 5*time.Second, func() bool { return n.app.status.text == "Host added" })
 	n.want("Launchers")
 }
 
@@ -334,7 +334,7 @@ func (n *node) sendText(port, body string, within time.Duration) string {
 	address := n.app.page.address
 	d.click("Send")
 	n.until("the send to finish", within, func() bool {
-		return !n.app.busy[sendKey(address)] && !strings.HasPrefix(n.app.status, "Sending")
+		return !n.app.busy[sendKey(address)] && !strings.HasPrefix(n.app.status.text, "Sending")
 	})
 	// A failed send keeps its window open and shows the error there, not in the
 	// status bar, so the outcome is read from the window.
@@ -344,7 +344,7 @@ func (n *node) sendText(port, body string, within time.Duration) string {
 			return text
 		}
 	}
-	return n.app.status
+	return n.app.status.text
 }
 
 // dialogOpen reports whether the dialog window titled title is open.
@@ -486,7 +486,7 @@ func TestApplication(t *testing.T) {
 	step("the admin approves it from the list", func(t *testing.T) {
 		host.self()
 		host.click("Approve")
-		host.until("approval", 5*time.Second, func() bool { return strings.HasPrefix(host.app.status, "Approved ") })
+		host.until("approval", 5*time.Second, func() bool { return strings.HasPrefix(host.app.status.text, "Approved ") })
 		host.until("the approved row", 5*time.Second, func() bool { return host.has("this machine, until") })
 		host.want(alice.clientKey().String(), "this machine, until")
 		host.wantNot("no certificate")
@@ -522,8 +522,8 @@ func TestApplication(t *testing.T) {
 	step("the SSH launcher tunnels to the host's SSH server and copies the command that reaches it", func(t *testing.T) {
 		alice.click("SSH launcher")
 		alice.idle(time.Minute)
-		if alice.app.status != "SSH connected" {
-			t.Fatalf("status = %q", alice.app.status)
+		if alice.app.status.text != "SSH connected" {
+			t.Fatalf("status = %q", alice.app.status.text)
 		}
 		tun := alice.app.connections[addr]["SSH"].(*connector.Tunnel)
 		id, err := connector.ParseHost(addr)
@@ -549,8 +549,8 @@ func TestApplication(t *testing.T) {
 		}
 		alice.click("SSH launcher")
 		alice.idle(time.Minute)
-		if alice.app.status != "SSH disconnected" || alice.enabledTile("SSH launcher") {
-			t.Fatalf("status %q after disconnecting", alice.app.status)
+		if alice.app.status.text != "SSH disconnected" || alice.enabledTile("SSH launcher") {
+			t.Fatalf("status %q after disconnecting", alice.app.status.text)
 		}
 	})
 
@@ -558,8 +558,8 @@ func TestApplication(t *testing.T) {
 		argsFile := testharness.FakeRustDesk(t)
 		alice.click("RustDesk launcher")
 		alice.idle(time.Minute)
-		if alice.app.status != "RustDesk connected" {
-			t.Fatalf("status = %q", alice.app.status)
+		if alice.app.status.text != "RustDesk connected" {
+			t.Fatalf("status = %q", alice.app.status.text)
 		}
 		var launched []string
 		alice.until("RustDesk to start", time.Minute, func() bool {
@@ -590,8 +590,8 @@ func TestApplication(t *testing.T) {
 
 		alice.click("RustDesk launcher")
 		alice.idle(time.Minute)
-		if alice.app.status != "RustDesk disconnected" {
-			t.Fatalf("status = %q", alice.app.status)
+		if alice.app.status.text != "RustDesk disconnected" {
+			t.Fatalf("status = %q", alice.app.status.text)
 		}
 		if c, err := net.DialTimeout("tcp", local, 2*time.Second); err == nil {
 			c.Close()
@@ -609,8 +609,8 @@ func TestApplication(t *testing.T) {
 		bob.typeInto("Certificate", hex.EncodeToString(cert))
 		bob.click("Add")
 		bob.idle(time.Minute)
-		if bob.app.status != "Certificate saved" {
-			t.Fatalf("status = %q", bob.app.status)
+		if bob.app.status.text != "Certificate saved" {
+			t.Fatalf("status = %q", bob.app.status.text)
 		}
 		bob.click("lab")
 		status := bob.sendText("9000", "from bob", time.Minute)
@@ -659,7 +659,7 @@ func TestApplication(t *testing.T) {
 	step("blocking a client from the list cuts it off", func(t *testing.T) {
 		host.self()
 		host.click("Block " + alice.clientKey().String())
-		host.until("the block", 5*time.Second, func() bool { return strings.HasPrefix(host.app.status, "Blocked ") })
+		host.until("the block", 5*time.Second, func() bool { return strings.HasPrefix(host.app.status.text, "Blocked ") })
 		if r, _ := clientRow(host.app.gate, alice.clientKey()); r.State != admission.Blocked {
 			t.Fatal("alice is not blocked")
 		}
@@ -726,7 +726,7 @@ func TestApplication(t *testing.T) {
 		host.self()
 		host.scrollToTop()
 		host.toggleServer()
-		host.until("the server to stop", 30*time.Second, func() bool { return host.app.status == "Server stopped" })
+		host.until("the server to stop", 30*time.Second, func() bool { return host.app.status.text == "Server stopped" })
 		if host.app.serverAddr != "" {
 			t.Fatal("the server stopped but still has an address")
 		}

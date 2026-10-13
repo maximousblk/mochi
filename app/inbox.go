@@ -38,7 +38,7 @@ func (a *app) reloadInbox() {
 		texts, err := a.store.ReceivedTexts()
 		a.update(func() {
 			if err != nil {
-				a.status = fmt.Sprintf("Loading texts failed: %v", err)
+				a.say(page{}, fmt.Sprintf("Loading texts failed: %v", err))
 			} else {
 				a.inbox = texts
 			}
@@ -66,7 +66,7 @@ func (a *app) keepText(sender string, t textsender.Text) {
 	at := time.Now()
 	id, err := a.store.AddReceivedText(sender, t.Body, at)
 	if err != nil {
-		a.update(func() { a.status = fmt.Sprintf("Text from %s not saved: %v", sender, err) })
+		a.update(func() { a.say(page{}, fmt.Sprintf("Text from %s not saved: %v", sender, err)) })
 		return
 	}
 	opts := mygo.NotificationOptions{
@@ -83,7 +83,7 @@ func (a *app) keepText(sender string, t textsender.Text) {
 	a.update(func() {
 		a.reloadInbox()
 		if notifyErr != nil {
-			a.status = fmt.Sprintf("Text from %s saved, but no notification: %v", sender, notifyErr)
+			a.say(page{}, fmt.Sprintf("Text from %s saved, but no notification: %v", sender, notifyErr))
 		}
 	})
 }
@@ -154,7 +154,7 @@ func (a *app) deleteText(id int64) {
 		return a.store.DeleteReceivedText(id)
 	}, func(err error) {
 		if err != nil {
-			a.status = fmt.Sprintf("Delete failed: %v", err)
+			a.say(page{}, fmt.Sprintf("Delete failed: %v", err))
 			return
 		}
 		a.reloadInbox()

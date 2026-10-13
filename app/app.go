@@ -52,7 +52,8 @@ type app struct {
 	page          page
 	nameDraft     string
 	addrDraft     string
-	status        string
+	status        status
+	logPath       string
 	serverAddr    string
 	serverEnabled bool
 	server        *tailcat.Server
@@ -137,12 +138,14 @@ func Run(args []string) error {
 		return fmt.Errorf("opening state: %w", err)
 	}
 	// A GUI app has no console, so what it logs also goes to mochi.log beside
-	// the database. If the file cannot be opened, logging stays on stderr.
-	if f, err := os.OpenFile(filepath.Join(filepath.Dir(statePath), "mochi.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+	// the database. The Settings page shows this path. If the file cannot be
+	// opened, logging stays on stderr.
+	logPath := filepath.Join(filepath.Dir(statePath), "mochi.log")
+	if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
 		defer f.Close()
 		log.SetOutput(io.MultiWriter(os.Stderr, f))
 	}
-	a := &app{}
+	a := &app{logPath: logPath}
 	if err := a.load(store); err != nil {
 		return err
 	}
@@ -230,16 +233,16 @@ func (a *app) load(store *state.StateStore) (err error) {
 		case err == nil && on:
 			cfg, cerr := a.loadConfig(connector.ServerConfigKey(c), c.ServerFields())
 			if cerr != nil {
-				a.status = c.Name() + " settings not loaded, using defaults: " + cerr.Error()
+				a.say(page{}, c.Name()+" settings not loaded, using defaults: "+cerr.Error())
 			}
 			if err := c.Listen(cfg); err != nil {
-				a.status = c.Name() + " server not started: " + err.Error()
+				a.say(page{}, c.Name()+" server not started: "+err.Error())
 			} else {
 				a.serving[c.Name()] = true
 			}
 		case err == nil:
 			if err := c.Stop(); err != nil {
-				a.status = c.Name() + " server not stopped: " + err.Error()
+				a.say(page{}, c.Name()+" server not stopped: "+err.Error())
 			}
 		case !errors.Is(err, sql.ErrNoRows):
 			return fmt.Errorf("loading %s server setting: %w", c.Name(), err)
@@ -346,15 +349,15 @@ func (a *app) toggleServing(lc connector.Server) {
 		return nil
 	}, func(err error) {
 		if warn != nil {
-			a.status = name + " settings not loaded, using defaults: " + warn.Error()
+			a.say(page{}, name+" settings not loaded, using defaults: "+warn.Error())
 		}
 		if err != nil {
-			a.status = name + " server not changed: " + err.Error()
+			a.say(page{}, name+" server not changed: "+err.Error())
 			return
 		}
 		a.serving[name] = !on
 		if saveErr != nil {
-			a.status = "Saving " + name + " setting failed: " + saveErr.Error()
+			a.say(page{}, "Saving "+name+" setting failed: "+saveErr.Error())
 		}
 		a.checkHealth()
 	})
@@ -413,26 +416,26 @@ func (a *app) addHost() {
 		return
 	}
 	if a.nameDraft == "" || a.addrDraft == "" {
-		a.status = "Host name and address are required"
+		a.say(page{}, "Host name and address are required")
 		return
 	}
 	if _, err := tailcat.ParseAddr(tailcat.Addr(a.addrDraft)); err != nil {
-		a.status = fmt.Sprintf("Invalid Tailcat address: %v", err)
+		a.say(page{}, fmt.Sprintf("Invalid Tailcat address: %v", err))
 		return
 	}
 	host := state.Host{Name: a.nameDraft, Address: a.addrDraft}
-	a.status = "Adding host…"
+	a.say(hostScope(host.Address), "Adding host…")
 	a.async("host-add", func() error {
 		return a.store.AddHost(host)
 	}, func(err error) {
 		if err != nil {
-			a.status = fmt.Sprintf("Host not added: %v", err)
+			a.say(hostScope(host.Address), fmt.Sprintf("Host not added: %v", err))
 			return
 		}
 		a.hosts = append(a.hosts, host)
 		a.page = page{kind: pageHost, address: host.Address}
 		a.nameDraft, a.addrDraft = "", ""
-		a.status = "Host added"
+		a.say(hostScope(host.Address), "Host added")
 	})
 }
 
@@ -463,7 +466,7 @@ func (a *app) removeHost(address string, failed func(error)) {
 		return a.deleteClientConfigs(address)
 	}, func(err error) {
 		if err != nil {
-			a.status = "Remove failed: " + err.Error()
+			a.say(hostScope(address), "Remove failed: "+err.Error())
 			if failed != nil {
 				failed(err)
 			}
@@ -479,7 +482,7 @@ func (a *app) removeHost(address string, failed func(error)) {
 			a.page = page{}
 		}
 		a.closeHostDialogs(address)
-		a.status = "Host removed"
+		a.say(page{}, "Host removed")
 	})
 }
 
@@ -543,7 +546,7 @@ func (a *app) startServer() {
 	if a.server != nil || a.busy["server"] {
 		return
 	}
-	a.status = "Starting server…"
+	a.say(page{}, "Starting server…")
 	var s *tailcat.Server
 	var gate *admission.Gate
 	var stop context.CancelFunc
@@ -558,13 +561,13 @@ func (a *app) startServer() {
 	}, func(err error) {
 		if err != nil {
 			a.serverEnabled = false
-			a.status = "Server failed: " + err.Error()
+			a.say(page{}, "Server failed: "+err.Error())
 			return
 		}
 		a.server = s
 		a.gate, a.stopGate = gate, stop
 		a.serverAddr = string(s.TailcatAddr())
-		a.status = "Server started"
+		a.say(page{}, "Server started")
 		a.reloadClients()
 	})
 }
@@ -581,7 +584,7 @@ func (a *app) serverSwitched() {
 		err := a.store.SetBool("server_enabled", on)
 		a.update(func() {
 			if err != nil {
-				a.status = "Saving server setting failed: " + err.Error()
+				a.say(page{}, "Saving server setting failed: "+err.Error())
 				return
 			}
 			if a.serverEnabled {
@@ -607,14 +610,27 @@ func (a *app) stopServer() {
 	a.gate, a.stopGate = nil, nil
 	a.clients = nil
 	a.serverAddr = ""
-	a.status = "Stopping server…"
+	a.say(page{}, "Stopping server…")
 	a.async("server", func() error {
 		return s.Close()
 	}, func(err error) {
 		if err != nil {
-			a.status = "Server stop failed: " + err.Error()
+			a.say(page{}, "Server stop failed: "+err.Error())
 			return
 		}
-		a.status = "Server stopped"
+		a.say(page{}, "Server stopped")
 	})
+}
+
+// status is the latest message in the status bar. scope is the page the message
+// reports on, which the bar links to; text is what follows the scope's label.
+type status struct {
+	scope page
+	text  string
+}
+
+// say sets the status bar to text, reported on scope. Every status goes through
+// here so that the bar always knows which page the message belongs to.
+func (a *app) say(scope page, text string) {
+	a.status = status{scope: scope, text: text}
 }

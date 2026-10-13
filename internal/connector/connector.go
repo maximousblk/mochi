@@ -49,12 +49,9 @@ type Connector interface {
 	// ClientFields describes the per-host settings of the client side.
 	ClientFields() []Field
 	// Connect opens a client to host with cfg, which is already resolved against
-	// ClientFields. It returns once the client is open. The launcher's hand-off,
-	// such as opening a folder, may run after that, so it must not hold up the
-	// caller: if it fails later, onError reports the failure, from any goroutine,
-	// at most once, and the caller then disconnects the client. If Connect itself
-	// fails, nothing is left running.
-	Connect(host state.Host, cfg Config, onError func(error)) (Client, error)
+	// ClientFields, and does the launcher's hand-off, such as copying a command
+	// or opening a folder. If it fails, nothing is left running.
+	Connect(host state.Host, cfg Config) (Client, error)
 }
 
 // Client is a launcher's connection to one host.

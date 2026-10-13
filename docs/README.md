@@ -5,7 +5,7 @@ and rough edges.
 
 ## Features
 
-- Native window with a compact title bar and a status bar.
+- Native window with a compact title bar and a status bar. The status bar names the page a message belongs to, and links to that page.
 - Tray icon: double-click it, or choose **Open Mochi**, to show the window.
   Closing the window keeps Mochi running.
 - Host list: add, remove and persist Tailcat addresses.

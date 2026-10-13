@@ -72,16 +72,16 @@ func (a *app) clientsView(c *ui.Context) {
 				if approve && ui.Button(c, "Approve").Label("Approve "+key).Disabled(busy).Clicked() {
 					a.async(op, func() error { return gate.Approve(cl.Key) }, func(err error) {
 						if err != nil {
-							a.status = "Approve failed: " + err.Error()
+							a.say(page{}, "Approve failed: "+err.Error())
 						} else {
-							a.status = "Approved " + cl.Key.ShortString()
+							a.say(page{}, "Approved "+cl.Key.ShortString())
 						}
 						a.reloadClients()
 					})
 				}
 				if block && ui.Button(c, "Block").Label("Block "+key).Disabled(busy).Clicked() {
 					a.async(op, func() error { gate.Block(cl.Key); return nil }, func(error) {
-						a.status = "Blocked " + cl.Key.ShortString()
+						a.say(page{}, "Blocked "+cl.Key.ShortString())
 						a.reloadClients()
 					})
 				}

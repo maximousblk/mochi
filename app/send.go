@@ -41,7 +41,7 @@ func (a *app) openSend(host state.Host) {
 		return err
 	}, func(err error) {
 		if err != nil {
-			a.status = sendName + " settings not loaded, using defaults: " + err.Error()
+			a.say(hostScope(host.Address), sendName+" settings not loaded, using defaults: "+err.Error())
 		}
 		d := &sendDialog{host: host, port: cfg["port"]}
 		a.openDialog(key, host.Address, "Send text to "+host.Name, 380, func(c *ui.Context) {
@@ -103,7 +103,7 @@ func (a *app) submitText(d *sendDialog) {
 			d.err = "Send failed: " + err.Error()
 			return
 		}
-		a.status = fmt.Sprintf("Sent %d bytes to %s port %d", n, host.Name, port)
+		a.say(hostScope(host.Address), fmt.Sprintf("Sent %d bytes to %s port %d", n, host.Name, port))
 		a.closeDialog(key)
 	})
 }

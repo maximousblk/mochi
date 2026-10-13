@@ -5,7 +5,7 @@ Who may connect to this machine's Tailcat server.
 ## Identity
 
 Each machine has one secret: an Ed25519 seed stored in the state database. Its
-public half, the **machine key** (64 hex characters, shown in Settings), is the
+public half, the **machine key** (64 hex characters, shown on the **This device** page), is the
 machine's identity. The Tailcat node keys are derived from the seed, separately
 for serving and dialing, because one node key cannot do both at once without
 losing relay traffic.

@@ -55,6 +55,7 @@ Coverage numbers are a diagnostic, not a goal.
 | Configure a host's launcher from its tile, and removing the host deletes that config | `app/configure_test.go`: `TestUIConfigureHostTileSavesAndRemoveDeletes` |
 | A slow Connect leaves the window answering, the tile shows it busy, and a second click starts no second Connect | `app/ui_test.go`: `TestSlowConnectDoesNotBlockTheUI` |
 | Removing a host while its Connect is pending disconnects the late client | `app/ui_test.go`: `TestRemovingAHostDisconnectsALateConnect` |
+| A status belongs to its host: the bar names it and links to it from Settings, and a removed host's status is not a link | `app/ui_test.go`: `TestUIStatusIsScopedToItsPage` |
 | Each Configure dialog is its own window: one per target, focused when reopened, and the main window works while they are open | `app/configure_test.go`: `TestConfigureDialogsAreIndependentWindows` |
 | Persistent state: hosts, settings, identity, migrations | `internal/state/state_test.go` |
 

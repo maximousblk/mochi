@@ -102,7 +102,7 @@ func (a *app) openConfig(t configTarget) {
 		return err
 	}, func(err error) {
 		if err != nil {
-			a.status = t.title + " settings not loaded, using defaults: " + err.Error()
+			a.say(t.scope(), t.title+" settings not loaded, using defaults: "+err.Error())
 		}
 		d := &configDialog{target: t, values: make([]string, len(t.fields))}
 		for i, field := range t.fields {
@@ -169,10 +169,11 @@ func (a *app) saveConfig(d *configDialog) {
 				d.err = "save settings: " + err.Error()
 				return
 			}
-			a.status = t.name + " settings saved"
+			msg := t.name + " settings saved"
 			if _, connected := a.connections[t.host.Address][t.name]; connected {
-				a.status += "; they apply the next time you connect"
+				msg += "; they apply the next time you connect"
 			}
+			a.say(t.scope(), msg)
 			a.closeDialog(key)
 		})
 		return
@@ -191,7 +192,7 @@ func (a *app) saveConfig(d *configDialog) {
 			return
 		}
 		a.checkHealth()
-		a.status = s.Name() + " server settings saved"
+		a.say(page{}, s.Name()+" server settings saved")
 		a.closeDialog(key)
 	})
 }
@@ -217,4 +218,13 @@ func (a *app) applyServerConfig(s connector.Server, cfg connector.Config, servin
 		return true, fmt.Errorf("%s server not started, still serving with the previous settings: %w", name, err)
 	}
 	return true, a.store.SetConfig(key, cfg)
+}
+
+// scope is the page whose status reports on this target. A server is on the
+// self page; a launcher's client side is on the page of its host.
+func (t configTarget) scope() page {
+	if t.server != nil {
+		return page{}
+	}
+	return hostScope(t.host.Address)
 }

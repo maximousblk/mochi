@@ -20,14 +20,8 @@ func connectOp(address, name string) string { return "connect|" + address + "|" 
 // hostRemoveOp is the busy key of removing the host at address.
 func hostRemoveOp(address string) string { return "host-remove|" + address }
 
-// pendingConnect tracks one Connect while it runs off the UI thread. Its client
-// is stored only once Connect has returned on the UI thread, but a hand-off can
-// fail before that, so failed remembers an error that arrives early.
-type pendingConnect struct {
-	stored bool
-	client connector.Client
-	failed error
-}
+// hostScope is the status scope of the host at address, which is that host's page.
+func hostScope(address string) page { return page{kind: pageHost, address: address} }
 
 // toggleConnection connects lc to host when it is not connected, and
 // disconnects it when it is. Both run off the UI thread as the launcher's busy
@@ -38,46 +32,36 @@ func (a *app) toggleConnection(host state.Host, lc connector.Connector) {
 	if a.busy[op] {
 		return
 	}
+	scope := hostScope(host.Address)
 	if _, ok := a.connections[host.Address][name]; ok {
 		client := a.detachConnection(host.Address, name)
 		a.async(op, client.Disconnect, func(err error) {
 			if err != nil {
-				a.status = name + " disconnect failed: " + err.Error()
+				a.say(scope, name+" disconnect failed: "+err.Error())
 				return
 			}
-			a.status = name + " disconnected"
+			a.say(scope, name+" disconnected")
 		})
 		return
 	}
 
-	p := &pendingConnect{}
 	address := host.Address
-	onError := func(err error) {
-		a.update(func() { a.handoffFailed(address, name, p, err) })
-	}
 	var client connector.Client
 	var loadErr error
-	a.status = name + " connecting…"
+	a.say(scope, name+" connecting…")
 	a.async(op, func() error {
 		var cfg connector.Config
 		cfg, loadErr = a.loadConfig(connector.ClientConfigKey(name, address), lc.ClientFields())
 		var err error
-		client, err = lc.Connect(host, cfg, onError)
+		client, err = lc.Connect(host, cfg)
 		return err
 	}, func(err error) {
 		if err != nil {
-			a.status = name + " connector failed: " + err.Error()
+			a.say(scope, name+" connector failed: "+err.Error())
 			return
 		}
-		p.stored = true
-		p.client = client
 		if a.quitting || a.busy[hostRemoveOp(address)] || !a.hasHost(address) {
-			a.disconnectOff(client, name+" connection dropped")
-			return
-		}
-		if p.failed != nil {
-			a.disconnectOff(client, name+" stopped")
-			a.status = name + " stopped: " + p.failed.Error()
+			a.disconnectOff(client, scope, name+" connection dropped")
 			return
 		}
 		if a.connections == nil {
@@ -87,29 +71,11 @@ func (a *app) toggleConnection(host state.Host, lc connector.Connector) {
 			a.connections[address] = map[string]connector.Client{}
 		}
 		a.connections[address][name] = client
-		a.status = name + " connected"
+		a.say(scope, name+" connected")
 		if loadErr != nil {
-			a.status = name + " connected with default settings: " + loadErr.Error()
+			a.say(scope, name+" connected with default settings: "+loadErr.Error())
 		}
 	})
-}
-
-// handoffFailed runs on the UI thread when a launcher's hand-off fails after its
-// Connect returned. It drops the connection, because the tunnel is no longer
-// useful to the user.
-func (a *app) handoffFailed(address, name string, p *pendingConnect, err error) {
-	if !p.stored {
-		if p.failed == nil {
-			p.failed = err
-		}
-		return
-	}
-	if a.connections[address][name] != p.client {
-		return
-	}
-	client := a.detachConnection(address, name)
-	a.disconnectOff(client, name+" stopped")
-	a.status = name + " stopped: " + err.Error()
 }
 
 // detachConnection removes the connection of name to address from the table and
@@ -136,13 +102,13 @@ func (a *app) detachHost(address string) []connector.Client {
 }
 
 // disconnectOff disconnects client off the UI thread and reports a failure in
-// the status bar. label names the connection in that report.
-func (a *app) disconnectOff(client connector.Client, label string) {
+// the status of scope. label names the connection in that report.
+func (a *app) disconnectOff(client connector.Client, scope page, label string) {
 	go func() {
 		err := client.Disconnect()
 		a.update(func() {
 			if err != nil {
-				a.status = label + ": disconnect failed: " + err.Error()
+				a.say(scope, label+": disconnect failed: "+err.Error())
 			}
 		})
 	}()
@@ -186,8 +152,9 @@ func (a *app) reapIdle(now time.Time) {
 				continue
 			}
 			a.detachConnection(address, name)
-			a.disconnectOff(client, name+" idle")
-			a.status = name + " disconnected after being idle"
+			scope := hostScope(address)
+			a.disconnectOff(client, scope, name+" idle")
+			a.say(scope, name+" disconnected after being idle")
 		}
 	}
 }

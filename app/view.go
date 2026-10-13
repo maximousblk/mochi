@@ -44,7 +44,7 @@ func (a *app) view(c *ui.Context) {
 					self.Background(theme.SurfacePressed)
 				}
 				self.Children(func() {
-					ui.Column(c).AlignItems(ui.Stretch).Children(func() {
+					ui.Column(c).Grow(1).AlignItems(ui.Stretch).Children(func() {
 						ui.Text(c, selfTitle()).SingleLine()
 						ui.Text(c, inboxCaption(len(a.inbox))).FontSize(11).TextColor(theme.TextMuted).SingleLine()
 					})
@@ -60,7 +60,7 @@ func (a *app) view(c *ui.Context) {
 							item.Background(theme.SurfacePressed)
 						}
 						item.Children(func() {
-							ui.Column(c).AlignItems(ui.Stretch).Children(func() {
+							ui.Column(c).Grow(1).AlignItems(ui.Stretch).Children(func() {
 								ui.Text(c, host.Name).SingleLine()
 								ui.Text(c, host.Address).FontSize(11).TextColor(theme.TextMuted).SingleLine().MinWidth(0).Tooltip(host.Address)
 							})
@@ -86,7 +86,7 @@ func (a *app) view(c *ui.Context) {
 					}
 				})
 				ui.Row(c).Height(28).Background(theme.Surface).Padding(12, 0).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, a.status).TextColor(theme.TextMuted).SingleLine()
+					a.statusBar(c)
 				})
 			})
 		})
@@ -98,6 +98,48 @@ func (a *app) view(c *ui.Context) {
 func (a *app) goTo(p page) {
 	a.page = p
 	a.pageScroll.X, a.pageScroll.Y = 0, 0
+}
+
+// statusBar shows the latest status: the name of the page it reports on, which
+// links to that page, then the message. Nothing shows before the first status.
+func (a *app) statusBar(c *ui.Context) {
+	if a.status.text == "" {
+		return
+	}
+	theme := c.Theme()
+	label, linked := a.scopeLabel(a.status.scope)
+	if linked {
+		link := ui.ButtonBase(c).Label("Go to " + label).Cursor(ui.CursorPointer)
+		link.Children(func() {
+			ui.Text(c, label).TextColor(theme.Accent).SingleLine()
+		})
+		if link.Clicked() {
+			a.goTo(a.status.scope)
+		}
+	} else {
+		ui.Text(c, label).TextColor(theme.TextMuted).SingleLine()
+	}
+	ui.Text(c, " · ").TextColor(theme.TextMuted).SingleLine()
+	ui.Text(c, a.status.text).TextColor(theme.TextMuted).SingleLine()
+}
+
+// scopeLabel is the name of the page a status reports on, and whether that page
+// can be linked to. A removed host has no page any more, so its status names the
+// address, unlinked.
+func (a *app) scopeLabel(scope page) (string, bool) {
+	switch scope.kind {
+	case pageSettings:
+		return "Settings", true
+	case pageHost:
+		for _, host := range a.hosts {
+			if host.Address == scope.address {
+				return host.Name, true
+			}
+		}
+		return scope.address, false
+	default:
+		return selfTitle(), true
+	}
 }
 
 // selfTitle is the name of this machine, which the self page and sidebar show.
@@ -123,6 +165,18 @@ func inboxCaption(n int) string {
 func (a *app) selfView(c *ui.Context) {
 	theme := c.Theme()
 	ui.Text(c, selfTitle()).FontSize(28).Bold()
+	// The keys sit under the title, styled as a host's address and node key: one
+	// muted line each, with the full value in its tooltip and a copy button.
+	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+		pub := a.identity.NodeKey(state.RoleClient).Public().String()
+		ui.Text(c, "Client public key: "+pub).TextColor(theme.TextMuted).SingleLine().MinWidth(0).Grow(1).Tooltip(pub)
+		a.copyButton(c, pub, "client public key")
+	})
+	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+		id := hex.EncodeToString(a.identity.Public())
+		ui.Text(c, "Machine key: "+id).TextColor(theme.TextMuted).SingleLine().MinWidth(0).Grow(1).Tooltip(id)
+		a.copyButton(c, id, "machine key")
+	})
 	ui.Row(c).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, "Enable Tailcat server").Grow(1)
 		ui.Switch(c, &a.serverEnabled).Disabled(a.busy["server"]).Label("Enable Tailcat server").OnChange(a.serverSwitched)
@@ -258,7 +312,7 @@ func launcherTile(c *ui.Context, name, tooltip string, icon *ui.SVG, enabled, wa
 func (a *app) copyButton(c *ui.Context, value, label string) {
 	if iconButton(c, clipboardIcon, "Copy "+label).Clicked() {
 		c.WriteClipboard(value)
-		a.status = "Copied " + label
+		a.say(a.page, "Copied "+label)
 	}
 }
 
@@ -295,9 +349,9 @@ func nodeIDFromAddress(address string) string {
 	return info.ServerPublic.NodePublic.String()
 }
 
-// settingsView holds what is about this machine and not about any one host:
-// the database, the keys, and the certificates. The server switch and the
-// admission lists are on the self page.
+// settingsView holds what is about this machine and not about any one host: the
+// database, the log file, and the certificates. The keys, the server switch and
+// the admission lists are on the self page.
 func (a *app) settingsView(c *ui.Context) {
 	theme := c.Theme()
 	ui.Text(c, "Settings").FontSize(24).Bold()
@@ -305,31 +359,15 @@ func (a *app) settingsView(c *ui.Context) {
 		dbPath := a.store.DatabasePath()
 		ui.Text(c, "Database: "+dbPath).TextColor(theme.TextMuted).SingleLine().MinWidth(0).Grow(1).Tooltip(dbPath)
 		if iconButton(c, folderIcon, "Open containing folder").Clicked() {
-			open := mygo.Shell.OpenPath
-			if a.openPath != nil {
-				open = a.openPath
-			}
-			dir := filepath.Dir(dbPath)
-			// Opening a folder starts a file manager, which can take a moment, so
-			// it runs off the UI thread.
-			a.async("open-folder", func() error {
-				return open(dir)
-			}, func(err error) {
-				if err != nil {
-					a.status = "Opening folder failed: " + err.Error()
-				}
-			})
+			a.openContaining(dbPath)
 		}
 	})
 	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-		pub := a.identity.NodeKey(state.RoleClient).Public().String()
-		ui.Text(c, "Client public key: "+pub).TextColor(theme.TextMuted).SingleLine().MinWidth(0).Grow(1).Tooltip(pub)
-		a.copyButton(c, pub, "client public key")
-	})
-	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-		id := hex.EncodeToString(a.identity.Public())
-		ui.Text(c, "Machine key: "+id).TextColor(theme.TextMuted).SingleLine().MinWidth(0).Grow(1).Tooltip(id)
-		a.copyButton(c, id, "machine key")
+		logPath := a.logPath
+		ui.Text(c, "Log file: "+logPath).TextColor(theme.TextMuted).SingleLine().MinWidth(0).Grow(1).Tooltip(logPath)
+		if iconButton(c, folderIcon, "Open containing folder").Clicked() {
+			a.openContaining(logPath)
+		}
 	})
 	ui.Text(c, "Certificates").FontSize(18).Bold()
 	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
@@ -340,22 +378,40 @@ func (a *app) settingsView(c *ui.Context) {
 	})
 }
 
+// openContaining opens the folder that holds path in the file manager. Opening a
+// folder starts a file manager, which can take a moment, so it runs off the UI
+// thread. A failure is reported on the Settings page, where both folder buttons are.
+func (a *app) openContaining(path string) {
+	open := mygo.Shell.OpenPath
+	if a.openPath != nil {
+		open = a.openPath
+	}
+	dir := filepath.Dir(path)
+	a.async("open-folder", func() error {
+		return open(dir)
+	}, func(err error) {
+		if err != nil {
+			a.say(page{kind: pageSettings}, "Opening folder failed: "+err.Error())
+		}
+	})
+}
+
 // addCert saves a certificate pasted as hex. The hex check is pure and runs
 // here; the store write runs off the UI thread.
 func (a *app) addCert(text string) {
 	cert, err := hex.DecodeString(text)
 	if err != nil {
-		a.status = "Certificate is not valid hex"
+		a.say(page{kind: pageSettings}, "Certificate is not valid hex")
 		return
 	}
 	a.async("cert-add", func() error {
 		return a.store.AddCert(cert)
 	}, func(err error) {
 		if err != nil {
-			a.status = "Saving certificate failed: " + err.Error()
+			a.say(page{kind: pageSettings}, "Saving certificate failed: "+err.Error())
 			return
 		}
 		a.certDraft = ""
-		a.status = "Certificate saved"
+		a.say(page{kind: pageSettings}, "Certificate saved")
 	})
 }

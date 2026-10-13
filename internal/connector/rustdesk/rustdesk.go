@@ -92,10 +92,9 @@ func (c *Connector) ClientFields() []connector.Field {
 }
 
 // Connect checks that the host accepts direct-IP connections, tunnels to its
-// direct-IP port, and launches RustDesk on the tunnel in the background, so
-// Connect returns as soon as the tunnel is open. If RustDesk cannot be launched,
-// onError reports it.
-func (c *Connector) Connect(host state.Host, cfg connector.Config, onError func(error)) (connector.Client, error) {
+// direct-IP port, and launches RustDesk on the tunnel. If RustDesk cannot be
+// launched, the tunnel is closed and the error says so.
+func (c *Connector) Connect(host state.Host, cfg connector.Config) (connector.Client, error) {
 	exe, err := executable()
 	if err != nil {
 		return nil, err
@@ -122,11 +121,10 @@ func (c *Connector) Connect(host state.Host, cfg connector.Config, onError func(
 	if err != nil {
 		return nil, err
 	}
-	go func() {
-		if err := share.StartProcess(exe, "--connect", fmt.Sprintf("127.0.0.1:%d", t.Port())); err != nil {
-			onError(fmt.Errorf("start RustDesk: %w", err))
-		}
-	}()
+	if err := share.StartProcess(exe, "--connect", fmt.Sprintf("127.0.0.1:%d", t.Port())); err != nil {
+		t.Disconnect()
+		return nil, fmt.Errorf("start RustDesk: %w", err)
+	}
 	return t, nil
 }
 

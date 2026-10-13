@@ -48,7 +48,7 @@ func (c *toggleConnector) ServerFields() []connector.Field {
 func (c *toggleConnector) ClientFields() []connector.Field {
 	return []connector.Field{{Key: "port", Label: "Host's port", Default: "9000", Check: connector.CheckPort}}
 }
-func (c *toggleConnector) Connect(_ state.Host, _ connector.Config, _ func(error)) (connector.Client, error) {
+func (c *toggleConnector) Connect(_ state.Host, _ connector.Config) (connector.Client, error) {
 	c.connects++
 	if c.hold != nil {
 		<-c.hold
@@ -151,7 +151,8 @@ func newUI(t *testing.T, withGate bool, hosts []state.Host, connectors ...connec
 	if err := registerFonts(); err != nil {
 		t.Fatal(err)
 	}
-	store, err := state.OpenState(filepath.Join(t.TempDir(), "mochi.db"), "")
+	dir := t.TempDir()
+	store, err := state.OpenState(filepath.Join(dir, "mochi.db"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,6 +169,7 @@ func newUI(t *testing.T, withGate bool, hosts []state.Host, connectors ...connec
 	e := &uiEnv{t: t, q: make(chan func(), 4096)}
 	a := &app{
 		hosts:       hosts,
+		logPath:     filepath.Join(dir, "mochi.log"),
 		store:       store,
 		identity:    id,
 		ports:       connector.NewPorts(),
@@ -324,7 +326,7 @@ func (e *uiEnv) refresh() {
 	e.tt.Frame()
 }
 
-func (e *uiEnv) status() string { return e.app.status }
+func (e *uiEnv) status() string { return e.app.status.text }
 
 // openSettings opens the Settings page from the gear in the title bar.
 func (e *uiEnv) openSettings() {
@@ -349,7 +351,7 @@ func TestUIEmptyState(t *testing.T) {
 func TestUILayout(t *testing.T) {
 	h := state.Host{Name: "lab", Address: testAddress(t)}
 	e := newUI(t, false, []state.Host{h})
-	e.app.status = "Everything is fine"
+	e.app.say(page{}, "Everything is fine")
 	e.tt.Frame()
 
 	title, _ := e.tt.Find("Mochi")
@@ -539,6 +541,41 @@ func TestUILaunchers(t *testing.T) {
 	}
 }
 
+// A status is reported on the page it belongs to: the bar names that page and
+// links to it from any other page, and a status for a host that is gone names
+// its address without a link.
+func TestUIStatusIsScopedToItsPage(t *testing.T) {
+	lab := state.Host{Name: "lab", Address: testAddress(t)}
+	plain := &toggleConnector{name: "Plain"}
+	e := newUI(t, false, []state.Host{lab}, plain)
+	e.click("lab")
+	e.click("Plain launcher")
+	e.settle(connectOp(lab.Address, "Plain"))
+	if e.status() != "Plain connected" {
+		t.Fatalf("status = %q", e.status())
+	}
+	if got := e.app.status.scope; got != hostScope(lab.Address) {
+		t.Fatalf("status scope = %+v, want lab's page", got)
+	}
+
+	e.click("Settings")
+	if _, ok := e.tt.Find("Go to lab"); !ok {
+		t.Fatalf("no link to lab from Settings; visible: %q", e.tt.Texts())
+	}
+	e.click("Go to lab")
+	if e.app.page != hostScope(lab.Address) {
+		t.Fatalf("page = %+v, want lab's page", e.app.page)
+	}
+	e.want("Launchers")
+
+	e.app.say(hostScope("tc-removed"), "Plain disconnected")
+	e.tt.Frame()
+	if _, ok := e.tt.Find("Go to tc-removed"); ok {
+		t.Fatal("a status for a removed host links to it")
+	}
+	e.want("tc-removed", "Plain disconnected")
+}
+
 func TestUIRemoveHost(t *testing.T) {
 	h := state.Host{Name: "lab", Address: testAddress(t)}
 	other := state.Host{Name: "keep", Address: testAddress(t)}
@@ -624,10 +661,12 @@ func TestUISettingsBasics(t *testing.T) {
 	e.openSettings()
 	id := hex.EncodeToString(e.app.identity.Public())
 	client := e.app.identity.NodeKey(state.RoleClient).Public().String()
-	e.want("Database", "Open containing folder",
-		"Machine key: "+id, "Client public key: "+client, "Certificates", "Add")
-	e.wantNot("Pending approval") // no server running, nothing to list
+	e.want("Database", "Log file: "+e.app.logPath, "Open containing folder", "Certificates", "Add")
+	e.wantNot("Machine key", "Client public key", "Pending approval") // the keys are on This device, and no server runs
 
+	// The keys sit under the title of This device, each with its own copy button.
+	e.click(selfTitle())
+	e.want("Machine key: "+id, "Client public key: "+client)
 	e.click("Copy machine key")
 	if e.tt.Clipboard() != id {
 		t.Fatalf("clipboard = %q, want the machine key", e.tt.Clipboard())
@@ -638,7 +677,6 @@ func TestUISettingsBasics(t *testing.T) {
 	}
 
 	// The server's address and its start or stop state are on the self page.
-	e.click(selfTitle())
 	e.app.serverAddr = "tcExampleServerAddress"
 	e.tt.Frame()
 	e.want("Server address: tcExampleServerAddress")

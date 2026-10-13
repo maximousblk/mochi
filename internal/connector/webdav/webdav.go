@@ -222,11 +222,10 @@ func (c *Connector) Healthy() bool {
 	return port != 0 && c.ports.Registered(port) && c.access.Check()
 }
 
-// Connect tunnels to the host's WebDAV port in cfg, and copies the share's
-// address. The file manager is opened in the background, so Connect returns as
-// soon as the tunnel is open: a slow or failing file manager must not hold up
-// the caller. If it cannot be started, onError reports why.
-func (c *Connector) Connect(host state.Host, cfg connector.Config, onError func(error)) (connector.Client, error) {
+// Connect tunnels to the host's WebDAV port in cfg, and opens the share in the
+// platform file manager. The address is copied. If the file manager cannot be
+// started, the tunnel is closed again.
+func (c *Connector) Connect(host state.Host, cfg connector.Config) (connector.Client, error) {
 	info, err := connector.ParseHost(host.Address)
 	if err != nil {
 		return nil, err
@@ -252,11 +251,10 @@ func (c *Connector) Connect(host state.Host, cfg connector.Config, onError func(
 		return nil, err
 	}
 	address := share.Address(runtime.GOOS, t.Port())
+	if err := share.Open(runtime.GOOS, address); err != nil {
+		t.Disconnect()
+		return nil, fmt.Errorf("open file manager: %w", err)
+	}
 	c.copyText(address)
-	go func() {
-		if err := share.Open(runtime.GOOS, address); err != nil {
-			onError(fmt.Errorf("open file manager: %w", err))
-		}
-	}()
 	return t, nil
 }

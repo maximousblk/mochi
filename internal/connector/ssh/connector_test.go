@@ -70,7 +70,7 @@ func TestSSHOverTailcatThroughCopiedCommand(t *testing.T) {
 	var copied string
 	client := New(connector.NewPorts(), nil, func(s string) { copied = s }, nil, admission.Dialing{Key: key.NewNode()})
 	clientCfg := connector.Config{"port": servePort, "user": me.Username}
-	c, err := client.Connect(state.Host{Name: "lab", Address: address}, clientCfg, func(error) {})
+	c, err := client.Connect(state.Host{Name: "lab", Address: address}, clientCfg)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

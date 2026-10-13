@@ -19,7 +19,7 @@ failing at once.
 - **Connections** are not stored. A launcher's connection to a host exists only
   while Mochi runs, and is closed when it has been idle for six hours.
 - **Identity:** the machine's Ed25519 seed. Its public half is the machine key
-  shown in Settings. See [Admission](ADMISSION.md).
+  shown on the **This device** page. See [Admission](ADMISSION.md).
 - **Server:** the server's node key, pre-shared key and relay region. They
   persist across restarts, so the server address stays the same.
 - **Admission:** trusted CA keys, approved and blocked clients, and the
@@ -36,6 +36,8 @@ planned, not implemented.
 Mochi logs to `mochi.log`, beside `mochi.db`, as well as to stderr: server
 start failures, tray problems and the like. It is appended to and never
 rotated.
+
+The **Settings** page shows the path of `mochi.log` with a button that opens its folder.
 
 WebDAV errors go to `webdav.log`, beside `mochi.db`. Start Mochi with
 `--verbose` to log every WebDAV request and its status.
