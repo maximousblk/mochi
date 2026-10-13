@@ -10,18 +10,42 @@ import (
 	"github.com/ashwin-y/mochi/internal/state"
 )
 
-// fakeClient is a launcher's client that records when it is disconnected.
+// fakeClient is a launcher's client that records when it is disconnected. When
+// gone is set, its first disconnect closes it, so a test can wait for the
+// disconnect that runs off the UI thread.
 type fakeClient struct {
 	last          time.Time
 	disconnects   int
 	disconnectErr error
+	gone          chan struct{}
 }
 
 func (c *fakeClient) LastUsed() time.Time { return c.last }
 
 func (c *fakeClient) Disconnect() error {
 	c.disconnects++
+	if c.disconnects == 1 && c.gone != nil {
+		close(c.gone)
+	}
 	return c.disconnectErr
+}
+
+// queuedApp returns an app whose UI work lands on the returned queue, for
+// tests that start work off the UI thread and then apply its result by hand.
+func queuedApp(store *state.StateStore) (*app, chan func()) {
+	q := make(chan func(), 16)
+	return &app{store: store, runOnUI: func(fn func()) { q <- fn }}, q
+}
+
+// runQueued applies the next UI step the app queued, failing if none arrives.
+func runQueued(t *testing.T, q chan func()) {
+	t.Helper()
+	select {
+	case fn := <-q:
+		fn()
+	case <-time.After(5 * time.Second):
+		t.Fatal("the app queued no UI work")
+	}
 }
 
 // Removing a host disconnects each of its clients, then forgets the host.
@@ -36,15 +60,13 @@ func TestRemoveHostDisconnectsItsClients(t *testing.T) {
 		t.Fatal(err)
 	}
 	first, second := &fakeClient{}, &fakeClient{}
-	a := &app{
-		hosts:        []state.Host{host},
-		selectedHost: host.Address,
-		store:        store,
-		connections:  map[string]map[string]connector.Client{host.Address: {"first": first, "second": second}},
-	}
-	if err := a.removeHost(0); err != nil {
-		t.Fatalf("remove host: %v", err)
-	}
+	a, q := queuedApp(store)
+	a.hosts = []state.Host{host}
+	a.connections = map[string]map[string]connector.Client{host.Address: {"first": first, "second": second}}
+
+	a.removeHost(host.Address, func(err error) { t.Errorf("remove host: %v", err) })
+	runQueued(t, q)
+
 	if first.disconnects != 1 || second.disconnects != 1 {
 		t.Fatalf("disconnects: first=%d second=%d, want 1 each", first.disconnects, second.disconnects)
 	}
@@ -68,12 +90,15 @@ func TestRemoveHostKeepsHostWhenDisconnectFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	stuck := &fakeClient{disconnectErr: errors.New("cannot disconnect")}
-	a := &app{
-		hosts:       []state.Host{host},
-		store:       store,
-		connections: map[string]map[string]connector.Client{host.Address: {"stuck": stuck}},
-	}
-	if err := a.removeHost(0); err == nil {
+	a, q := queuedApp(store)
+	a.hosts = []state.Host{host}
+	a.connections = map[string]map[string]connector.Client{host.Address: {"stuck": stuck}}
+
+	var failure error
+	a.removeHost(host.Address, func(err error) { failure = err })
+	runQueued(t, q)
+
+	if failure == nil {
 		t.Fatal("remove succeeded despite a failed disconnect")
 	}
 	if len(a.hosts) != 1 {
@@ -88,13 +113,20 @@ func TestRemoveHostKeepsHostWhenDisconnectFails(t *testing.T) {
 // idleTimeout, and keeps one that moved data more recently.
 func TestReapIdleDisconnectsOnlyStaleClients(t *testing.T) {
 	now := time.Now()
-	stale := &fakeClient{last: now.Add(-idleTimeout - time.Minute)}
+	stale := &fakeClient{last: now.Add(-idleTimeout - time.Minute), gone: make(chan struct{})}
 	fresh := &fakeClient{last: now.Add(-time.Hour)}
 	a := &app{connections: map[string]map[string]connector.Client{
 		"lab": {"SSH": stale, "WebDAV": fresh},
 	}}
 
 	a.reapIdle(now)
+
+	// The disconnect runs off the UI thread, so the test waits for it.
+	select {
+	case <-stale.gone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stale client was not disconnected")
+	}
 
 	if stale.disconnects != 1 {
 		t.Fatalf("stale client disconnected %d times, want 1", stale.disconnects)

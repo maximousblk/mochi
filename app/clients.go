@@ -8,27 +8,50 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// refreshClients reloads the lists Settings shows. The database is read here,
-// once a while and after each action, not on every frame.
-func (a *app) refreshClients() {
-	if a.gate == nil {
+// clientStates are the admission states the self page lists, in display order.
+var clientStates = []string{admission.Probation, admission.Rejected, admission.Approved, admission.Blocked}
+
+// reloadClients reads the lists the self page shows, off the UI thread, and
+// replaces a.clients when the read finishes. A request made during a read, such
+// as the one after Block, is not dropped: another read follows it, so the lists
+// always catch up with the last change.
+func (a *app) reloadClients() {
+	gate := a.gate
+	if gate == nil {
 		a.clients = nil
 		return
 	}
-	a.clients = map[string][]admission.Client{}
-	for _, st := range []string{admission.Probation, admission.Rejected, admission.Approved, admission.Blocked} {
-		a.clients[st] = a.gate.Clients(st)
+	if !a.clientsReload.start() {
+		return
 	}
+	go func() {
+		lists := map[string][]admission.Client{}
+		for _, st := range clientStates {
+			lists[st] = gate.Clients(st)
+		}
+		a.update(func() {
+			if a.gate == gate {
+				a.clients = lists
+			}
+			if a.clientsReload.done() {
+				a.reloadClients()
+			}
+		})
+	}()
 }
 
-// clientsView lists the nodes this host's server has seen: the ones waiting
-// for approval, the ones approved, and the ones blocked.
+// clientsView lists the nodes this host's server has seen: the ones waiting for
+// approval, the ones approved, and the ones blocked. Approve and Block run off
+// the UI thread, and the row's buttons are disabled while its action runs.
 func (a *app) clientsView(c *ui.Context) {
-	if a.gate == nil {
+	gate := a.gate
+	if gate == nil {
 		return
 	}
 	if a.clients == nil {
-		a.refreshClients()
+		a.reloadClients()
+		ui.Text(c, "Loading…").TextColor(c.Theme().TextMuted)
+		return
 	}
 	theme := c.Theme()
 	pending := append(append([]admission.Client{}, a.clients[admission.Probation]...), a.clients[admission.Rejected]...)
@@ -41,21 +64,26 @@ func (a *app) clientsView(c *ui.Context) {
 		}
 		for _, cl := range rows {
 			key := cl.Key.String()
+			op := "gate|" + key
+			busy := a.busy[op]
 			ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 				ui.Text(c, key).SingleLine().MinWidth(0).Grow(1).Tooltip(key)
 				ui.Text(c, detail(cl)).TextColor(theme.TextMuted).SingleLine()
-				if approve && ui.Button(c, "Approve").Label("Approve "+key).Clicked() {
-					if err := a.gate.Approve(cl.Key); err != nil {
-						a.status = "Approve failed: " + err.Error()
-					} else {
-						a.status = "Approved " + cl.Key.ShortString()
-					}
-					a.refreshClients()
+				if approve && ui.Button(c, "Approve").Label("Approve "+key).Disabled(busy).Clicked() {
+					a.async(op, func() error { return gate.Approve(cl.Key) }, func(err error) {
+						if err != nil {
+							a.status = "Approve failed: " + err.Error()
+						} else {
+							a.status = "Approved " + cl.Key.ShortString()
+						}
+						a.reloadClients()
+					})
 				}
-				if block && ui.Button(c, "Block").Label("Block "+key).Clicked() {
-					a.gate.Block(cl.Key)
-					a.status = "Blocked " + cl.Key.ShortString()
-					a.refreshClients()
+				if block && ui.Button(c, "Block").Label("Block "+key).Disabled(busy).Clicked() {
+					a.async(op, func() error { gate.Block(cl.Key); return nil }, func(error) {
+						a.status = "Blocked " + cl.Key.ShortString()
+						a.reloadClients()
+					})
 				}
 			})
 		}
@@ -68,7 +96,7 @@ func (a *app) clientsView(c *ui.Context) {
 	}, true, true)
 	section("Approved", a.clients[admission.Approved], func(cl admission.Client) string {
 		by := cl.Name
-		if cl.CA == a.gate.SelfFingerprint() {
+		if cl.CA == gate.SelfFingerprint() {
 			by = "this machine"
 		}
 		return fmt.Sprintf("%s, until %s", by, cl.Expires.Format(time.DateTime))

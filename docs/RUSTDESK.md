@@ -35,10 +35,10 @@ to disk.
 
 ## Settings
 
-Right-click the RustDesk tile and choose **Configure…**. On the Settings page
+Right-click the RustDesk tile and choose **Configure…**. On the **This device** page
 this edits this machine's server; on a host's page it edits that host's client.
 
-Server fields (Settings page):
+Server fields (This device page):
 
 - **Tailcat port** (`port`), default `21118`: the port the server serves.
 - **RustDesk direct IP port** (`local_port`), default `21118`: the local port the

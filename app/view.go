@@ -2,6 +2,8 @@ package app
 
 import (
 	"encoding/hex"
+	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/ashwin-y/mochi/internal/connector"
@@ -17,22 +19,44 @@ func (a *app) view(c *ui.Context) {
 	c.SetTheme(&theme)
 	bar := c.TitleBar()
 	ui.Column(c).Fill().AlignItems(ui.Stretch).Children(func() {
+		// The title bar holds the way back to this device's page on the left and
+		// the Settings gear on the right. The right padding clears the native
+		// window controls, so the gear sits just left of them.
 		ui.Row(c).Height(max(bar.Height, 44)).Padding(0, bar.Right+12, 0, bar.Left+16).Background(theme.Background).AlignItems(ui.Center).DragWindow().Children(func() {
-			ui.Text(c, "Mochi").FontSize(16).Bold().Grow(1)
+			if flatButton(c, "This device", func() {
+				ui.Text(c, "Mochi").FontSize(16).Bold()
+			}).Clicked() {
+				a.goTo(page{})
+			}
+			ui.Row(c).Grow(1)
+			if iconButton(c, settingsIcon, "Settings").Clicked() {
+				a.goTo(page{kind: pageSettings})
+			}
 		})
 		ui.Row(c).Height(1).Background(theme.Border)
 		ui.Row(c).Grow(1).AlignItems(ui.Stretch).Children(func() {
 			ui.Column(c).Width(240).Background(theme.Surface).Padding(12).Gap(10).AlignItems(ui.Stretch).Children(func() {
 				if ui.PrimaryButton(c, "+  Add host").Clicked() {
-					a.addingHost = true
-					a.showSettings = false
-					a.showInbox = false
+					a.goTo(page{kind: pageAddHost})
+				}
+				self := ui.Button(c, "").Label(selfTitle()).AlignItems(ui.Stretch)
+				if a.page.kind == pageSelf {
+					self.Background(theme.SurfacePressed)
+				}
+				self.Children(func() {
+					ui.Column(c).AlignItems(ui.Stretch).Children(func() {
+						ui.Text(c, selfTitle()).SingleLine()
+						ui.Text(c, inboxCaption(len(a.inbox))).FontSize(11).TextColor(theme.TextMuted).SingleLine()
+					})
+				})
+				if self.Clicked() {
+					a.goTo(page{})
 				}
 				ui.Text(c, "Hosts").FontWeight(600).TextColor(theme.TextMuted).SingleLine()
 				ui.Scroll(c).Grow(1).Gap(6).AlignItems(ui.Stretch).Children(func() {
 					for _, host := range a.hosts {
 						item := ui.Button(c, "").Label(host.Name).AlignItems(ui.Stretch)
-						if host.Address == a.selectedHost {
+						if a.page.kind == pageHost && host.Address == a.page.address {
 							item.Background(theme.SurfacePressed)
 						}
 						item.Children(func() {
@@ -42,34 +66,23 @@ func (a *app) view(c *ui.Context) {
 							})
 						})
 						if item.Clicked() {
-							a.selectedHost = host.Address
-							a.showSettings = false
-							a.addingHost = false
-							a.showInbox = false
+							a.goTo(page{kind: pageHost, address: host.Address})
 						}
 					}
 				})
-				if ui.Button(c, a.inboxLabel()).Clicked() {
-					a.openInbox()
-				}
-				if ui.Button(c, "⚙  Settings").Clicked() {
-					a.showSettings = true
-					a.addingHost = false
-					a.showInbox = false
-				}
 			})
 
 			ui.Column(c).Grow(1).AlignItems(ui.Stretch).Children(func() {
 				ui.Scroll(c).TrackScroll(&a.pageScroll).Grow(1).Padding(28).Gap(16).AlignItems(ui.Stretch).Children(func() {
-					switch {
-					case a.showSettings:
+					switch a.page.kind {
+					case pageSettings:
 						a.settingsView(c)
-					case a.addingHost:
+					case pageAddHost:
 						a.addHostView(c)
-					case a.showInbox:
-						a.inboxView(c)
-					default:
+					case pageHost:
 						a.hostView(c)
+					default:
+						a.selfView(c)
 					}
 				})
 				ui.Row(c).Height(28).Background(theme.Surface).Padding(12, 0).AlignItems(ui.Center).Children(func() {
@@ -78,7 +91,66 @@ func (a *app) view(c *ui.Context) {
 			})
 		})
 	})
-	a.configDialog(c)
+}
+
+// goTo shows page p and scrolls it back to the top, so a page never opens part
+// way down.
+func (a *app) goTo(p page) {
+	a.page = p
+	a.pageScroll.X, a.pageScroll.Y = 0, 0
+}
+
+// selfTitle is the name of this machine, which the self page and sidebar show.
+// It falls back to "This device" when the machine has no name.
+func selfTitle() string {
+	if name, err := os.Hostname(); err == nil && name != "" {
+		return name
+	}
+	return "This device"
+}
+
+// inboxCaption is the sidebar's line under the self entry: how many texts the
+// Inbox holds.
+func inboxCaption(n int) string {
+	if n == 0 {
+		return "This device"
+	}
+	return fmt.Sprintf("Inbox: %d", n)
+}
+
+// selfView is this device's page: its server switch and launchers, its address,
+// the Inbox when it holds texts, and the clients waiting for admission.
+func (a *app) selfView(c *ui.Context) {
+	theme := c.Theme()
+	ui.Text(c, selfTitle()).FontSize(28).Bold()
+	ui.Row(c).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "Enable Tailcat server").Grow(1)
+		ui.Switch(c, &a.serverEnabled).Disabled(a.busy["server"]).Label("Enable Tailcat server").OnChange(a.serverSwitched)
+	})
+	ui.Text(c, "Launchers").FontSize(18).Bold()
+	ui.Row(c).Gap(12).Children(func() {
+		for _, lc := range a.servers {
+			name := lc.Name()
+			on := a.serving[name]
+			warn := on && a.unhealthy[name]
+			tip := "Let other machines use " + name
+			if launcherTile(c, name, tip, lc.Icon(), on, warn, a.busy[serveOp(name)], func() {
+				a.openConfig(serverTarget(lc))
+			}).Clicked() {
+				a.toggleServing(lc)
+			}
+		}
+	})
+	if a.busy["server"] {
+		ui.Text(c, "Server operation in progress…").TextColor(theme.TextMuted)
+	} else if a.serverAddr != "" {
+		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+			ui.Text(c, "Server address: "+a.serverAddr).TextColor(theme.TextMuted).SingleLine().MinWidth(0).Grow(1).Tooltip(a.serverAddr)
+			a.copyButton(c, a.serverAddr, "server address")
+		})
+	}
+	a.inboxView(c)
+	a.clientsView(c)
 }
 
 func (a *app) addHostView(c *ui.Context) {
@@ -86,11 +158,11 @@ func (a *app) addHostView(c *ui.Context) {
 	ui.TextInput(c, &a.nameDraft).Placeholder("Host name").Label("Host name")
 	ui.TextInput(c, &a.addrDraft).Placeholder("tc…").Label("Tailcat address")
 	ui.Row(c).Gap(8).Children(func() {
-		if ui.PrimaryButton(c, "Save host").Clicked() {
+		if ui.PrimaryButton(c, "Save host").Disabled(a.busy["host-add"]).Clicked() {
 			a.addHost()
 		}
 		if ui.Button(c, "Cancel").Clicked() {
-			a.addingHost = false
+			a.goTo(page{})
 			a.nameDraft, a.addrDraft = "", ""
 		}
 	})
@@ -99,44 +171,29 @@ func (a *app) addHostView(c *ui.Context) {
 func (a *app) hostView(c *ui.Context) {
 	theme := c.Theme()
 	var host *state.Host
-	if a.selectedHost == "" {
-		ui.Text(c, "Mochi").FontSize(28).Bold()
-		ui.Text(c, "Select a host from the sidebar or add a new one.").TextColor(theme.TextMuted)
-		return
-	}
 	for i := range a.hosts {
-		if a.hosts[i].Address == a.selectedHost {
+		if a.hosts[i].Address == a.page.address {
 			host = &a.hosts[i]
 			break
 		}
 	}
 	if host == nil {
-		a.selectedHost = ""
+		// The host was removed while its page was open.
+		a.goTo(page{})
 		return
 	}
+	h := *host
 	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-		ui.Text(c, host.Name).FontSize(28).Bold().Grow(1).SingleLine().MinWidth(0)
+		ui.Text(c, h.Name).FontSize(28).Bold().Grow(1).SingleLine().MinWidth(0)
 		if iconButton(c, trashIcon, "Remove host").Clicked() {
-			a.confirmRemove = true
+			a.openRemove(h)
 		}
 	})
-	if ui.AlertDialog(c, &a.confirmRemove, "Remove "+host.Name+"?", "This removes the host and closes its connections.", "No", "Yes") == 1 {
-		a.confirmRemove = false
-		for i := range a.hosts {
-			if a.hosts[i].Address == a.selectedHost {
-				if err := a.removeHost(i); err != nil {
-					a.status = "Host cleanup failed: " + err.Error()
-				}
-				break
-			}
-		}
-		return
-	}
 	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-		ui.Text(c, host.Address).TextColor(theme.TextMuted).SingleLine().MinWidth(0).Grow(1).Tooltip(host.Address)
-		a.copyButton(c, host.Address, "connection string")
+		ui.Text(c, h.Address).TextColor(theme.TextMuted).SingleLine().MinWidth(0).Grow(1).Tooltip(h.Address)
+		a.copyButton(c, h.Address, "connection string")
 	})
-	if nodeID := nodeIDFromAddress(host.Address); nodeID != "" {
+	if nodeID := nodeIDFromAddress(h.Address); nodeID != "" {
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.Text(c, nodeID).FontSize(12).TextColor(theme.TextMuted).SingleLine().MinWidth(0).Grow(1).Tooltip(nodeID)
 			a.copyButton(c, nodeID, "node ID")
@@ -146,43 +203,48 @@ func (a *app) hostView(c *ui.Context) {
 	ui.Text(c, "Launchers").FontSize(18).Bold()
 	ui.Row(c).Gap(12).Children(func() {
 		for _, lc := range a.connectors {
-			_, connected := a.connections[host.Address][lc.Name()]
-			if launcherTile(c, lc.Name(), "Toggle "+lc.Name()+" connector", lc.Icon(), connected, false, func() {
-				a.openConfig(clientTarget(lc.Name(), *host, lc.ClientFields()))
+			name := lc.Name()
+			_, connected := a.connections[h.Address][name]
+			busy := a.busy[connectOp(h.Address, name)]
+			if launcherTile(c, name, "Toggle "+name+" connector", lc.Icon(), connected, false, busy, func() {
+				a.openConfig(clientTarget(name, h, lc.ClientFields()))
 			}).Clicked() {
-				a.toggleConnection(*host, lc)
+				a.toggleConnection(h, lc)
 			}
 		}
-		if launcherTile(c, "Send text", "Send text to this host", textSenderIcon, false, false, func() {
-			a.openConfig(clientTarget("Send text", *host, textsender.ClientFields()))
+		if launcherTile(c, "Send text", "Send text to this host", textSenderIcon, false, false, false, func() {
+			a.openConfig(clientTarget("Send text", h, textsender.ClientFields()))
 		}).Clicked() {
-			a.sendPort = a.configFor(connector.ClientConfigKey("Send text", host.Address), "Send text", textsender.ClientFields())["port"]
-			a.sendOpen = true
+			a.openSend(h)
 		}
 	})
-	a.sendDialog(c, *host)
 }
 
 // launcherTile is a square launcher: accent-filled while enabled, and yellow
-// while enabled but not working (warn). Its right-click menu has a Configure…
+// while enabled but not working (warn). While busy it is disabled and its
+// label says so with a "…" suffix. Its right-click menu has a Configure…
 // item that calls configure.
-func launcherTile(c *ui.Context, name, tooltip string, icon *ui.SVG, enabled, warn bool, configure func()) ui.Element {
+func launcherTile(c *ui.Context, name, tooltip string, icon *ui.SVG, enabled, warn, busy bool, configure func()) ui.Element {
 	theme := c.Theme()
 	fill, text := theme.Accent, theme.AccentText
 	if warn {
 		fill = theme.Warning
 	}
-	tile := ui.Button(c, "").Label(name + " launcher").Tooltip(tooltip).Width(104).Height(92)
+	label := name
+	if busy {
+		label += "…"
+	}
+	tile := ui.Button(c, "").Label(name + " launcher").Tooltip(tooltip).Width(104).Height(92).Disabled(busy)
 	if enabled {
 		tile.Background(fill).TextColor(text)
 	}
 	tile.Children(func() {
 		ui.Column(c).AlignItems(ui.Center).Gap(5).Children(func() {
 			iconEl := ui.Icon(c, icon).Size(28, 28)
-			label := ui.Text(c, name).FontSize(12)
+			lbl := ui.Text(c, label).FontSize(12)
 			if enabled {
 				iconEl.TextColor(text)
-				label.TextColor(text)
+				lbl.TextColor(text)
 			}
 		})
 	})
@@ -233,34 +295,12 @@ func nodeIDFromAddress(address string) string {
 	return info.ServerPublic.NodePublic.String()
 }
 
+// settingsView holds what is about this machine and not about any one host:
+// the database, the keys, and the certificates. The server switch and the
+// admission lists are on the self page.
 func (a *app) settingsView(c *ui.Context) {
 	theme := c.Theme()
 	ui.Text(c, "Settings").FontSize(24).Bold()
-	ui.Row(c).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, "Enable Tailcat server").Grow(1)
-		ui.Switch(c, &a.serverEnabled).Disabled(a.serverBusy).Label("Enable Tailcat server").OnChange(a.serverSwitched)
-	})
-	ui.Text(c, "Connectors").FontSize(18).Bold()
-	ui.Row(c).Gap(12).Children(func() {
-		for _, lc := range a.servers {
-			on := a.serving[lc.Name()]
-			warn := on && a.unhealthy[lc.Name()]
-			tip := "Let other machines use " + lc.Name()
-			if launcherTile(c, lc.Name(), tip, lc.Icon(), on, warn, func() {
-				a.openConfig(serverTarget(lc))
-			}).Clicked() {
-				a.toggleServing(lc)
-			}
-		}
-	})
-	if a.serverBusy {
-		ui.Text(c, "Server operation in progress…").TextColor(theme.TextMuted)
-	} else if a.serverAddr != "" {
-		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-			ui.Text(c, "Server address: "+a.serverAddr).TextColor(theme.TextMuted).SingleLine().MinWidth(0).Grow(1).Tooltip(a.serverAddr)
-			a.copyButton(c, a.serverAddr, "server address")
-		})
-	}
 	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 		dbPath := a.store.DatabasePath()
 		ui.Text(c, "Database: "+dbPath).TextColor(theme.TextMuted).SingleLine().MinWidth(0).Grow(1).Tooltip(dbPath)
@@ -269,9 +309,16 @@ func (a *app) settingsView(c *ui.Context) {
 			if a.openPath != nil {
 				open = a.openPath
 			}
-			if err := open(filepath.Dir(dbPath)); err != nil {
-				a.status = "Opening folder failed: " + err.Error()
-			}
+			dir := filepath.Dir(dbPath)
+			// Opening a folder starts a file manager, which can take a moment, so
+			// it runs off the UI thread.
+			a.async("open-folder", func() error {
+				return open(dir)
+			}, func(err error) {
+				if err != nil {
+					a.status = "Opening folder failed: " + err.Error()
+				}
+			})
 		}
 	})
 	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
@@ -287,16 +334,28 @@ func (a *app) settingsView(c *ui.Context) {
 	ui.Text(c, "Certificates").FontSize(18).Bold()
 	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 		ui.TextInput(c, &a.certDraft).Placeholder("Paste a certificate").Label("Certificate").Grow(1)
-		if ui.Button(c, "Add").Clicked() && a.certDraft != "" {
-			if cert, err := hex.DecodeString(a.certDraft); err != nil {
-				a.status = "Certificate is not valid hex"
-			} else if err := a.store.AddCert(cert); err != nil {
-				a.status = "Saving certificate failed: " + err.Error()
-			} else {
-				a.certDraft = ""
-				a.status = "Certificate saved"
-			}
+		if ui.Button(c, "Add").Disabled(a.busy["cert-add"]).Clicked() && a.certDraft != "" {
+			a.addCert(a.certDraft)
 		}
 	})
-	a.clientsView(c)
+}
+
+// addCert saves a certificate pasted as hex. The hex check is pure and runs
+// here; the store write runs off the UI thread.
+func (a *app) addCert(text string) {
+	cert, err := hex.DecodeString(text)
+	if err != nil {
+		a.status = "Certificate is not valid hex"
+		return
+	}
+	a.async("cert-add", func() error {
+		return a.store.AddCert(cert)
+	}, func(err error) {
+		if err != nil {
+			a.status = "Saving certificate failed: " + err.Error()
+			return
+		}
+		a.certDraft = ""
+		a.status = "Certificate saved"
+	})
 }

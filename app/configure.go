@@ -8,7 +8,7 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// configTarget is what the Configure dialog edits: the server side of a launcher
+// configTarget is what a Configure window edits: the server side of a launcher
 // on this machine, or one launcher's client side for one host.
 type configTarget struct {
 	title  string
@@ -36,37 +36,49 @@ func (t configTarget) key() string {
 	return connector.ClientConfigKey(t.name, t.host.Address)
 }
 
-// configForm is the Configure dialog while it is open. values holds the text of
-// each field, in the order of target.fields.
-type configForm struct {
-	open   bool
+// dialogKey is the identity of the target's Configure window. A target has one
+// settings key, so it has one window.
+func (t configTarget) dialogKey() string { return "configure|" + t.key() }
+
+// hostAddress is the address of the host the target concerns, or "" for a
+// server target, which concerns no host.
+func (t configTarget) hostAddress() string {
+	if t.server != nil {
+		return ""
+	}
+	return t.host.Address
+}
+
+// configDialog is the state of one open Configure window. values holds the text
+// of each field, in the order of target.fields, and err is the last failed save.
+type configDialog struct {
 	target configTarget
 	values []string
 	err    string
 }
 
-// configFor returns the settings saved under key, completed with defaults. A
+// loadConfig returns the settings saved under key, completed with defaults. A
 // saved config that no longer resolves, such as a folder that was removed, falls
-// back to the defaults and says so in the status bar, so the launcher still
-// starts.
-func (a *app) configFor(key, label string, fields []connector.Field) connector.Config {
+// back to the defaults, and the error says why. It reads the store, so callers
+// run it off the UI thread.
+func (a *app) loadConfig(key string, fields []connector.Field) (connector.Config, error) {
 	saved, err := a.store.Config(key)
 	if err == nil {
 		var cfg connector.Config
 		if cfg, err = connector.Resolve(fields, saved); err == nil {
-			return cfg
+			return cfg, nil
 		}
 	}
-	a.status = label + " settings not loaded, using defaults: " + err.Error()
 	defaults := connector.Config{}
 	for _, f := range fields {
 		defaults[f.Key] = f.Default
 	}
-	return defaults
+	return defaults, err
 }
 
 // deleteClientConfigs forgets the client settings every launcher kept for the
-// host at address, so a removed host leaves nothing behind.
+// host at address, so a removed host leaves nothing behind. It reads and writes
+// the store, so callers run it off the UI thread.
 func (a *app) deleteClientConfigs(address string) error {
 	for _, s := range a.servers {
 		if err := a.store.DeleteSetting(connector.ClientConfigKey(s.Name(), address)); err != nil {
@@ -76,105 +88,133 @@ func (a *app) deleteClientConfigs(address string) error {
 	return nil
 }
 
-// openConfig opens the Configure dialog on t, showing the settings it has now.
+// openConfig opens the Configure window on t, showing the settings it has now.
+// The settings are read off the UI thread, so the window opens once they are
+// loaded. A window already open for t is focused instead.
 func (a *app) openConfig(t configTarget) {
-	current := a.configFor(t.key(), t.title, t.fields)
-	values := make([]string, len(t.fields))
-	for i, f := range t.fields {
-		values[i] = current[f.Key]
-	}
-	a.config = configForm{open: true, target: t, values: values}
-}
-
-// configDialog shows the Configure dialog while a.config is open. Each field's
-// placeholder is its default, and its help text sits under it.
-func (a *app) configDialog(c *ui.Context) {
-	f := &a.config
-	ui.Modal(c, &f.open, func() {
-		theme := c.Theme()
-		ui.Text(c, f.target.title).FontSize(18).Bold()
-		for i, field := range f.target.fields {
-			ui.TextInput(c, &f.values[i]).Placeholder(field.Default).Label(field.Label)
-			if field.Help != "" {
-				ui.Text(c, field.Help).TextColor(theme.TextMuted)
-			}
-		}
-		if f.err != "" {
-			ui.Text(c, f.err).TextColor(theme.Danger)
-		}
-		ui.Row(c).Gap(8).Children(func() {
-			if ui.PrimaryButton(c, "Save").Clicked() {
-				a.saveConfig()
-			}
-			if ui.Button(c, "Reset to defaults").Clicked() {
-				for i, field := range f.target.fields {
-					f.values[i] = field.Default
-				}
-				f.err = ""
-			}
-			if ui.Button(c, "Cancel").Clicked() {
-				f.open = false
-			}
-		})
-	})
-	if !f.open {
-		f.err = ""
-	}
-}
-
-// saveConfig applies the dialog's values. A value that fails its check keeps the
-// dialog open with the error, and changes nothing.
-func (a *app) saveConfig() {
-	f := &a.config
-	raw := connector.Config{}
-	for i, field := range f.target.fields {
-		raw[field.Key] = f.values[i]
-	}
-	cfg, err := connector.Resolve(f.target.fields, raw)
-	if err != nil {
-		f.err = err.Error()
+	if d, ok := a.dialogs[t.dialogKey()]; ok {
+		d.win.Focus()
 		return
 	}
-	t := f.target
-	if t.server != nil {
-		if err := a.applyServerConfig(t.server, cfg); err != nil {
-			f.err = err.Error()
+	var cfg map[string]string
+	a.async(t.dialogKey(), func() (err error) {
+		cfg, err = a.loadConfig(t.key(), t.fields)
+		return err
+	}, func(err error) {
+		if err != nil {
+			a.status = t.title + " settings not loaded, using defaults: " + err.Error()
+		}
+		d := &configDialog{target: t, values: make([]string, len(t.fields))}
+		for i, field := range t.fields {
+			d.values[i] = cfg[field.Key]
+		}
+		a.openDialog(t.dialogKey(), t.hostAddress(), t.title, 360, func(c *ui.Context) {
+			a.configView(c, d)
+		})
+	})
+}
+
+// configView draws a Configure window. Each field's placeholder is its default,
+// and its help text sits under it. Save is disabled while the save runs.
+func (a *app) configView(c *ui.Context, d *configDialog) {
+	theme := c.Theme()
+	busy := a.busy[d.target.dialogKey()]
+	for i, field := range d.target.fields {
+		ui.TextInput(c, &d.values[i]).Placeholder(field.Default).Label(field.Label)
+		if field.Help != "" {
+			ui.Text(c, field.Help).TextColor(theme.TextMuted)
+		}
+	}
+	if d.err != "" {
+		ui.Text(c, d.err).TextColor(theme.Danger)
+	}
+	ui.Row(c).Gap(8).Children(func() {
+		save := "Save"
+		if busy {
+			save = "Saving…"
+		}
+		if ui.PrimaryButton(c, save).Disabled(busy).Clicked() {
+			a.saveConfig(d)
+		}
+		if ui.Button(c, "Reset to defaults").Disabled(busy).Clicked() {
+			for i, field := range d.target.fields {
+				d.values[i] = field.Default
+			}
+			d.err = ""
+		}
+		if ui.Button(c, "Cancel").Clicked() {
+			a.closeDialog(d.target.dialogKey())
+		}
+	})
+}
+
+// saveConfig applies the dialog's values off the UI thread. A value that fails
+// its check keeps the dialog open with the error and changes nothing. A save
+// that succeeds closes the window.
+func (a *app) saveConfig(d *configDialog) {
+	t := d.target
+	raw := connector.Config{}
+	for i, field := range t.fields {
+		raw[field.Key] = d.values[i]
+	}
+	cfg, err := connector.Resolve(t.fields, raw)
+	if err != nil {
+		d.err = err.Error()
+		return
+	}
+	key := t.dialogKey()
+	if t.server == nil {
+		a.async(key, func() error { return a.store.SetConfig(t.key(), cfg) }, func(err error) {
+			if err != nil {
+				d.err = "save settings: " + err.Error()
+				return
+			}
+			a.status = t.name + " settings saved"
+			if _, connected := a.connections[t.host.Address][t.name]; connected {
+				a.status += "; they apply the next time you connect"
+			}
+			a.closeDialog(key)
+		})
+		return
+	}
+	s := t.server
+	wasServing := a.serving[s.Name()]
+	var serving bool
+	a.async(key, func() error {
+		var err error
+		serving, err = a.applyServerConfig(s, cfg, wasServing)
+		return err
+	}, func(err error) {
+		a.serving[s.Name()] = serving
+		if err != nil {
+			d.err = err.Error()
 			return
 		}
 		a.checkHealth()
-		a.status = t.server.Name() + " server settings saved"
-	} else {
-		if err := a.store.SetConfig(t.key(), cfg); err != nil {
-			f.err = "save settings: " + err.Error()
-			return
-		}
-		a.status = t.name + " settings saved"
-		if _, connected := a.connections[t.host.Address][t.name]; connected {
-			a.status += "; they apply the next time you connect"
-		}
-	}
-	f.open, f.err = false, ""
+		a.status = s.Name() + " server settings saved"
+		a.closeDialog(key)
+	})
 }
 
-// applyServerConfig saves cfg for server s. If s is serving, it restarts on cfg
-// first, and saves cfg only once it serves with it. If cfg does not listen, the
-// previous config is listened again, so the server stays up.
-func (a *app) applyServerConfig(s connector.Server, cfg connector.Config) error {
+// applyServerConfig saves cfg for server s and reports whether s serves
+// afterwards. A serving s restarts on cfg first, and cfg is saved only once s
+// serves with it. If cfg does not listen, the previous config is listened again,
+// so the server stays up. It runs off the UI thread.
+func (a *app) applyServerConfig(s connector.Server, cfg connector.Config, serving bool) (bool, error) {
 	key := connector.ServerConfigKey(s)
 	name := s.Name()
-	if !a.serving[name] {
-		return a.store.SetConfig(key, cfg)
+	if !serving {
+		return false, a.store.SetConfig(key, cfg)
 	}
-	previous := a.configFor(key, name, s.ServerFields())
+	previous, _ := a.loadConfig(key, s.ServerFields())
 	if err := s.Stop(); err != nil {
-		return fmt.Errorf("%s server not stopped: %w", name, err)
+		return true, fmt.Errorf("%s server not stopped: %w", name, err)
 	}
 	if err := s.Listen(cfg); err != nil {
 		if rerr := s.Listen(previous); rerr != nil {
-			a.serving[name] = false
-			return fmt.Errorf("%s server not started: %v; the previous settings did not start it either: %v", name, err, rerr)
+			return false, fmt.Errorf("%s server not started: %v; the previous settings did not start it either: %v", name, err, rerr)
 		}
-		return fmt.Errorf("%s server not started, still serving with the previous settings: %w", name, err)
+		return true, fmt.Errorf("%s server not started, still serving with the previous settings: %w", name, err)
 	}
-	return a.store.SetConfig(key, cfg)
+	return true, a.store.SetConfig(key, cfg)
 }

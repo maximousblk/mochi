@@ -23,7 +23,6 @@ func TestUIUnhealthyServerTileIsYellow(t *testing.T) {
 	// The switch is on, as Listen would have left it. The test sets the app's
 	// record directly: a click would start a health check that needs a window.
 	e.app.serving[sick.Name()] = true
-	e.openSettings()
 	revealInView(e.t, e.tt, "Sick launcher")
 	tile, ok := e.tt.Find("Sick launcher")
 	if !ok {

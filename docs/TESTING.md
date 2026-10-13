@@ -25,7 +25,7 @@ Coverage numbers are a diagnostic, not a goal.
 
 | Feature | Tests |
 | --- | --- |
-| Approve, block and un-block a node from Settings | `app/ui_test.go`: `TestUIApproveAndBlock`, `TestUIEachButtonActsOnItsOwnRow` |
+| Approve, block and un-block a node on This device | `app/ui_test.go`: `TestUIApproveAndBlock`, `TestUIEachButtonActsOnItsOwnRow` |
 | Whole session: admin approval, certificates, every launcher and setting | `app/app_e2e_test.go`: `TestApplication` |
 | Probation, certificate renewal, rejected and expired nodes | `internal/admission/*_test.go` |
 | Server address and approvals survive a restart | `internal/admission/onekey_test.go`: `TestServerRestart` |
@@ -53,6 +53,9 @@ Coverage numbers are a diagnostic, not a goal.
 | A port another launcher holds cannot be claimed | `internal/connector/ports_test.go`: `TestClaimRefusesHeldPort` |
 | Configure a serving launcher's port from Settings: it moves, and an invalid port changes nothing | `app/configure_test.go`: `TestUIConfigureServerPortRestartsServer`, `TestUIConfigureInvalidPortChangesNothing` |
 | Configure a host's launcher from its tile, and removing the host deletes that config | `app/configure_test.go`: `TestUIConfigureHostTileSavesAndRemoveDeletes` |
+| A slow Connect leaves the window answering, the tile shows it busy, and a second click starts no second Connect | `app/ui_test.go`: `TestSlowConnectDoesNotBlockTheUI` |
+| Removing a host while its Connect is pending disconnects the late client | `app/ui_test.go`: `TestRemovingAHostDisconnectsALateConnect` |
+| Each Configure dialog is its own window: one per target, focused when reopened, and the main window works while they are open | `app/configure_test.go`: `TestConfigureDialogsAreIndependentWindows` |
 | Persistent state: hosts, settings, identity, migrations | `internal/state/state_test.go` |
 
 ## Running

@@ -29,9 +29,13 @@ const (
 
 // toggleConnector is a launcher whose connections the test controls. Connect
 // fails with enableErr, or hands back a fakeClient that records its disconnect.
+// When hold is set, Connect blocks until hold is closed, as a slow dial does.
+// Each client closes gone when it disconnects, when gone is set.
 type toggleConnector struct {
 	name      string
 	enableErr error
+	hold      chan struct{}
+	gone      chan struct{}
 	connects  int
 	clients   []*fakeClient
 }
@@ -44,12 +48,15 @@ func (c *toggleConnector) ServerFields() []connector.Field {
 func (c *toggleConnector) ClientFields() []connector.Field {
 	return []connector.Field{{Key: "port", Label: "Host's port", Default: "9000", Check: connector.CheckPort}}
 }
-func (c *toggleConnector) Connect(state.Host, connector.Config) (connector.Client, error) {
+func (c *toggleConnector) Connect(_ state.Host, _ connector.Config, _ func(error)) (connector.Client, error) {
 	c.connects++
+	if c.hold != nil {
+		<-c.hold
+	}
 	if c.enableErr != nil {
 		return nil, c.enableErr
 	}
-	fc := &fakeClient{last: time.Now()}
+	fc := &fakeClient{last: time.Now(), gone: c.gone}
 	c.clients = append(c.clients, fc)
 	return fc, nil
 }
@@ -58,13 +65,73 @@ func (c *toggleConnector) Stop() error                   { return nil }
 func (c *toggleConnector) Healthy() bool                 { return true }
 
 // uiEnv is the app under test with its state in a temporary database, and the
-// tester that drives its view.
+// tester that drives its window. Work the app runs off the UI thread comes back
+// through q, and the test runs it where until and idle step the view.
 type uiEnv struct {
-	t     *testing.T
-	app   *app
-	tt    *ui.Tester
-	gate  *admission.Gate
-	theme ui.Theme
+	t       *testing.T
+	app     *app
+	tt      *ui.Tester
+	gate    *admission.Gate
+	theme   ui.Theme
+	q       chan func()
+	windows windowSet
+}
+
+// fakeWindow stands in for a dialog's native window. It draws the dialog's view
+// in its own tester, so a test clicks a dialog as it clicks the main window.
+type fakeWindow struct {
+	title    string
+	tt       *ui.Tester
+	closed   bool
+	onClosed func()
+}
+
+func (w *fakeWindow) Update(fn func()) { fn() }
+func (w *fakeWindow) Invalidate()      {}
+func (w *fakeWindow) Focus()           {}
+func (w *fakeWindow) OnClosed(fn func()) func() {
+	w.onClosed = fn
+	return func() { w.onClosed = nil }
+}
+func (w *fakeWindow) Close() {
+	if w.closed {
+		return
+	}
+	w.closed = true
+	if w.onClosed != nil {
+		w.onClosed()
+	}
+}
+
+// windowSet records the dialog windows a test opens in place of native ones.
+type windowSet struct{ all []*fakeWindow }
+
+func (s *windowSet) open(title string, w, h int, view func(*ui.Context)) dialogWindow {
+	win := &fakeWindow{title: title, tt: ui.NewTester(view, w, h)}
+	s.all = append(s.all, win)
+	return win
+}
+
+// find returns the most recently opened window titled title, open or closed,
+// or nil if none was ever opened.
+func (s *windowSet) find(title string) *fakeWindow {
+	for i := len(s.all) - 1; i >= 0; i-- {
+		if s.all[i].title == title {
+			return s.all[i]
+		}
+	}
+	return nil
+}
+
+// openCount is how many dialog windows are open now.
+func (s *windowSet) openCount() int {
+	n := 0
+	for _, w := range s.all {
+		if !w.closed {
+			n++
+		}
+	}
+	return n
 }
 
 func testAddress(t *testing.T) string {
@@ -98,6 +165,7 @@ func newUI(t *testing.T, withGate bool, hosts []state.Host, connectors ...connec
 			t.Fatal(err)
 		}
 	}
+	e := &uiEnv{t: t, q: make(chan func(), 4096)}
 	a := &app{
 		hosts:       hosts,
 		store:       store,
@@ -110,12 +178,14 @@ func newUI(t *testing.T, withGate bool, hosts []state.Host, connectors ...connec
 			return certs
 		}},
 		connectors: connectors,
+		runOnUI:    func(fn func()) { e.q <- fn },
+		openWindow: e.windows.open,
 	}
 	for _, c := range connectors {
 		a.servers = append(a.servers, c)
 	}
 	a.servers = append(a.servers, textsender.NewReceiver(a.ports, textSenderIcon, a.canNotify, a.receiveText))
-	e := &uiEnv{t: t, app: a}
+	e.app = a
 	if withGate {
 		extPub, _, _ := ed25519.GenerateKey(nil)
 		g, err := admission.NewGate(store.DB(), id.Private(), []ed25519.PublicKey{extPub})
@@ -135,6 +205,65 @@ func newUI(t *testing.T, withGate bool, hosts []state.Host, connectors ...connec
 	return e
 }
 
+// until runs the work that background goroutines queued, as the window's loop
+// does, until cond holds. It fails the test if cond does not hold in five seconds.
+func (e *uiEnv) until(what string, cond func() bool) {
+	e.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			e.t.Fatalf("timed out waiting for %s", what)
+		}
+		select {
+		case fn := <-e.q:
+			fn()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// idle waits until no operation is running and no list read is pending, then
+// draws the view. Each operation clears its busy state in the same UI step that
+// applies its result, and a Block or Approve starts a list read after it.
+func (e *uiEnv) idle() {
+	e.t.Helper()
+	e.until("the running operations", func() bool {
+		for _, busy := range e.app.busy {
+			if busy {
+				return false
+			}
+		}
+		return !e.app.clientsReload.busy() && !e.app.inboxReload.busy()
+	})
+	e.tt.Frame()
+}
+
+// settle waits until the operation op is no longer busy, then draws the view. A
+// test uses it after a click that starts an operation, such as a Connect, which
+// runs off the UI thread and applies its result on the UI thread later.
+func (e *uiEnv) settle(op string) {
+	e.t.Helper()
+	e.until("the operation "+op, func() bool { return !e.app.busy[op] })
+	e.tt.Frame()
+}
+
+// dialog returns a tester for the dialog window titled title: a copy of e that
+// clicks and reads that window. It fails the test when no such window is open.
+func (e *uiEnv) dialog(title string) *uiEnv {
+	e.t.Helper()
+	if !e.dialogOpen(title) {
+		e.t.Fatalf("no open dialog %q; main window shows %q", title, e.tt.Texts())
+	}
+	d := *e
+	d.tt = e.windows.find(title).tt
+	return &d
+}
+
+func (e *uiEnv) dialogOpen(title string) bool {
+	w := e.windows.find(title)
+	return w != nil && !w.closed
+}
+
 func (e *uiEnv) click(label string) {
 	e.t.Helper()
 	revealInView(e.t, e.tt, label)
@@ -146,6 +275,14 @@ func (e *uiEnv) click(label string) {
 func (e *uiEnv) typeInto(label, text string) {
 	e.t.Helper()
 	e.click(label)
+	e.tt.Type(text)
+}
+
+// replace makes the field labeled label hold exactly text.
+func (e *uiEnv) replace(label, text string) {
+	e.t.Helper()
+	e.click(label)
+	e.tt.Key(ui.Ctrl, ui.KeyA)
 	e.tt.Type(text)
 }
 
@@ -177,18 +314,23 @@ func (e *uiEnv) wantNot(texts ...string) {
 	}
 }
 
-// refresh does what the app's 2 s ticker does while Settings is open.
+// refresh does what the app's frames do on the self page: they start a read of
+// the client lists, which lands a little later. It waits for the read.
 func (e *uiEnv) refresh() {
-	e.app.refreshClients()
+	e.t.Helper()
+	e.until("the client lists", func() bool { return !e.app.clientsReload.busy() })
+	e.app.reloadClients()
+	e.until("the client lists", func() bool { return !e.app.clientsReload.busy() })
 	e.tt.Frame()
 }
 
 func (e *uiEnv) status() string { return e.app.status }
 
+// openSettings opens the Settings page from the gear in the title bar.
 func (e *uiEnv) openSettings() {
 	e.t.Helper()
-	e.click("⚙  Settings")
-	e.want("Settings")
+	e.click("Settings")
+	e.want("Database")
 }
 
 func (e *uiEnv) pixel(x, y float32) color.RGBA { return e.tt.Image().RGBAAt(int(x), int(y)) }
@@ -197,8 +339,8 @@ func sameColor(c color.RGBA, w ui.Color) bool { return c.R == w.R && c.G == w.G 
 
 func TestUIEmptyState(t *testing.T) {
 	e := newUI(t, false, nil)
-	e.want("Mochi", "Select a host from the sidebar or add a new one.", "Hosts", "+  Add host", "⚙  Settings")
-	e.wantNot("Launchers", "Remove host")
+	e.want("Mochi", "Hosts", "+  Add host", selfTitle())
+	e.wantNot("Remove host")
 }
 
 // The layout the sidebar, title bar and status bar were built to have: the
@@ -217,12 +359,12 @@ func TestUILayout(t *testing.T) {
 	if title.X < 70 {
 		t.Errorf("title starts at x=%v, under the native window controls (70 reserved)", title.X)
 	}
-	side, _ := e.tt.Find("⚙  Settings")
-	if side.X >= 240 {
-		t.Errorf("Settings button at x=%v, outside the 240px sidebar", side.X)
+	side, _ := e.tt.Find("Settings")
+	if side.X < 240 {
+		t.Errorf("Settings button at x=%v, not in the title bar's right corner", side.X)
 	}
-	if side.Y < uiHeight-80 {
-		t.Errorf("Settings button at y=%v: the sidebar does not reach the bottom (%d)", side.Y, uiHeight)
+	if side.Y > 44 {
+		t.Errorf("Settings button at y=%v, below the 44px title bar", side.Y)
 	}
 	status, _ := e.tt.Find("Everything is fine")
 	if status.X < 240 {
@@ -280,11 +422,12 @@ func TestUIAddHost(t *testing.T) {
 		t.Fatalf("drafts survived Cancel: %q %q", e.app.nameDraft, e.app.addrDraft)
 	}
 
-	// A good one is saved, selected and shown.
+	// A good one is saved, selected and shown. The write runs off the UI thread.
 	e.click("+  Add host")
 	e.typeInto("Host name", "lab")
 	e.typeInto("Tailcat address", addr)
 	e.click("Save host")
+	e.idle()
 	if e.status() != "Host added" {
 		t.Fatalf("status = %q", e.status())
 	}
@@ -302,11 +445,11 @@ func TestUISelectHostAndShowDetails(t *testing.T) {
 	h1 := state.Host{Name: "alpha", Address: testAddress(t)}
 	h2 := state.Host{Name: "beta", Address: testAddress(t)}
 	e := newUI(t, false, []state.Host{h1, h2})
-	e.want("alpha", "beta", "Select a host from the sidebar")
+	e.want("alpha", "beta", selfTitle())
 
 	e.click("beta")
-	if e.app.selectedHost != h2.Address {
-		t.Fatalf("selected %q, want beta's address", e.app.selectedHost)
+	if want := (page{kind: pageHost, address: h2.Address}); e.app.page != want {
+		t.Fatalf("page = %+v, want beta's host page", e.app.page)
 	}
 	// The sidebar lists every host's address, so the page is told apart by
 	// the node ID it shows.
@@ -363,6 +506,7 @@ func TestUILaunchers(t *testing.T) {
 
 	// Connecting: the launcher is called, and its tile turns accent-filled.
 	e.click("Plain launcher")
+	e.settle(connectOp(h.Address, "Plain"))
 	if plain.connects != 1 || len(e.app.connections[h.Address]) != 1 {
 		t.Fatalf("connects=%d connections=%v", plain.connects, e.app.connections)
 	}
@@ -375,6 +519,7 @@ func TestUILaunchers(t *testing.T) {
 
 	// Disconnecting disconnects the client, and returns the tile to plain.
 	e.click("Plain launcher")
+	e.settle(connectOp(h.Address, "Plain"))
 	if got := plain.clients[0].disconnects; got != 1 || len(e.app.connections) != 0 || e.status() != "Plain disconnected" {
 		t.Fatalf("disconnects=%d connections=%v status=%q", got, e.app.connections, e.status())
 	}
@@ -385,6 +530,7 @@ func TestUILaunchers(t *testing.T) {
 	// A failure is shown, and the tile stays plain.
 	plain.enableErr = errors.New("no route to host")
 	e.click("Plain launcher")
+	e.settle(connectOp(h.Address, "Plain"))
 	if e.status() != "Plain connector failed: no route to host" {
 		t.Fatalf("status = %q", e.status())
 	}
@@ -400,21 +546,26 @@ func TestUIRemoveHost(t *testing.T) {
 	e := newUI(t, false, []state.Host{h, other}, c)
 	e.click("lab")
 	e.click("Plain launcher")
+	e.idle()
 
 	e.click("Remove host")
-	e.want("Remove lab?", "This removes the host and closes its connections.", "Yes", "No")
+	d := e.dialog("Remove lab?")
+	d.want("This removes the host and closes its connections.", "Yes", "No")
 
-	// No keeps everything.
-	e.click("No")
-	e.wantNot("Remove lab?")
+	// No keeps everything, and closes the window.
+	d.click("No")
+	if e.dialogOpen("Remove lab?") {
+		t.Fatal("the Remove window stayed open after No")
+	}
 	if len(e.app.hosts) != 2 || c.clients[0].disconnects != 0 {
 		t.Fatalf("hosts=%d disconnects=%d after No", len(e.app.hosts), c.clients[0].disconnects)
 	}
 
-	// Yes disconnects the host's clients, deletes the host from memory and the store,
-	// and falls back to the empty page.
+	// Yes disconnects the host's clients, deletes the host from memory and the
+	// store, closes the window, and falls back to the empty page.
 	e.click("Remove host")
-	e.click("Yes")
+	e.dialog("Remove lab?").click("Yes")
+	e.idle()
 	if c.clients[0].disconnects != 1 {
 		t.Fatalf("client disconnected %d times, want once", c.clients[0].disconnects)
 	}
@@ -424,6 +575,9 @@ func TestUIRemoveHost(t *testing.T) {
 	stored, _ := e.app.store.Hosts()
 	if len(stored) != 1 || stored[0] != other {
 		t.Fatalf("stored hosts = %+v", stored)
+	}
+	if e.dialogOpen("Remove lab?") {
+		t.Fatal("the Remove window stayed open after Yes")
 	}
 	e.want("keep", "Host removed")
 	e.wantNot("Remove lab?", h.Address, nodeIDFromAddress(h.Address))
@@ -435,30 +589,34 @@ func TestUISendTextDialog(t *testing.T) {
 	e.click("lab")
 
 	e.click("Send text launcher")
-	e.want("Send text to lab", "Send", "Cancel")
+	e.until("the Send text window", func() bool { return e.dialogOpen("Send text to lab") })
+	d := e.dialog("Send text to lab")
+	d.want("Send", "Cancel")
 
-	// Validation happens before anything is sent.
-	e.typeInto("Port", "70000")
-	e.typeInto("Text to send", "hello")
-	e.click("Send")
-	if e.status() == "" || strings.HasPrefix(e.status(), "Sending") {
-		t.Fatalf("a bad port was sent: status = %q", e.status())
+	// A bad port keeps the window open, and nothing is sent.
+	d.replace("Port", "70000")
+	d.replace("Text to send", "hello")
+	d.click("Send")
+	if !e.dialogOpen("Send text to lab") {
+		t.Fatal("a bad port closed the window")
 	}
-	badPortStatus := e.status()
-
-	e.app.sendPort = ""
-	e.app.sendBody = ""
-	e.tt.Frame()
-	e.click("Send")
-	if e.status() != "Enter text to send" {
-		t.Fatalf("status = %q (the bad-port message was %q)", e.status(), badPortStatus)
-	}
-	if e.app.sendBusy {
-		t.Fatal("nothing was sent, but the dialog is busy")
+	if e.app.busy[sendKey(h.Address)] {
+		t.Fatal("a bad port started a send")
 	}
 
-	e.click("Cancel")
-	e.wantNot("Send text to lab")
+	// An empty body is refused with the reason.
+	d.replace("Port", "")
+	d.replace("Text to send", "")
+	d.click("Send")
+	d.want("Enter text to send")
+	if e.app.busy[sendKey(h.Address)] {
+		t.Fatal("an empty body started a send")
+	}
+
+	d.click("Cancel")
+	if e.dialogOpen("Send text to lab") {
+		t.Fatal("Cancel left the Send text window open")
+	}
 }
 
 func TestUISettingsBasics(t *testing.T) {
@@ -466,7 +624,7 @@ func TestUISettingsBasics(t *testing.T) {
 	e.openSettings()
 	id := hex.EncodeToString(e.app.identity.Public())
 	client := e.app.identity.NodeKey(state.RoleClient).Public().String()
-	e.want("Enable Tailcat server", "Database", "Open containing folder",
+	e.want("Database", "Open containing folder",
 		"Machine key: "+id, "Client public key: "+client, "Certificates", "Add")
 	e.wantNot("Pending approval") // no server running, nothing to list
 
@@ -479,7 +637,8 @@ func TestUISettingsBasics(t *testing.T) {
 		t.Fatalf("clipboard = %q, want the client key", e.tt.Clipboard())
 	}
 
-	// A running server shows its address, and offers to copy it.
+	// The server's address and its start or stop state are on the self page.
+	e.click(selfTitle())
 	e.app.serverAddr = "tcExampleServerAddress"
 	e.tt.Frame()
 	e.want("Server address: tcExampleServerAddress")
@@ -489,7 +648,7 @@ func TestUISettingsBasics(t *testing.T) {
 	}
 
 	// While a start or stop is in progress, say so.
-	e.app.serverAddr, e.app.serverBusy = "", true
+	e.app.serverAddr, e.app.busy = "", map[string]bool{"server": true}
 	e.tt.Frame()
 	e.want("Server operation in progress…")
 	e.wantNot("Server address:")
@@ -513,6 +672,7 @@ func TestUICertificates(t *testing.T) {
 	e.click("Certificate")
 	e.tt.Type("deadbeef")
 	e.click("Add")
+	e.idle()
 	if e.status() != "Certificate saved" {
 		t.Fatalf("status = %q", e.status())
 	}
@@ -531,19 +691,17 @@ func TestUICertificates(t *testing.T) {
 
 func TestUIClientListsAreHiddenWithoutAServer(t *testing.T) {
 	e := newUI(t, false, nil)
-	e.openSettings()
 	e.wantNot("Pending approval", "Approved", "Blocked")
 }
 
 // An approved node lists under Approved, attributed to this machine; the admin
-// can block it, and approve it again.
+// can block it, and approve it again. The lists are on the self page.
 func TestUIApproveAndBlock(t *testing.T) {
 	e := newUI(t, true, nil)
 	k := key.NewNode().Public()
 	if err := e.gate.Approve(k); err != nil {
 		t.Fatal(err)
 	}
-	e.openSettings()
 	e.refresh()
 	if r, _ := clientRow(e.gate, k); r.State != admission.Approved || r.CA != e.gate.SelfFingerprint() {
 		t.Fatalf("row = %+v", r)
@@ -556,19 +714,23 @@ func TestUIApproveAndBlock(t *testing.T) {
 
 	// Block takes it away; it moves to Blocked, where Approve lifts the block.
 	e.click("Block")
+	e.idle()
 	if r, _ := clientRow(e.gate, k); r.State != admission.Blocked {
 		t.Fatalf("row = %+v", r)
 	}
 	if !strings.HasPrefix(e.status(), "Blocked ") {
 		t.Fatalf("status = %q", e.status())
 	}
+	e.refresh()
 	e.wantNot("this machine, until")
 	e.want(k.String(), "Approve")
 
 	e.click("Approve")
+	e.idle()
 	if r, _ := clientRow(e.gate, k); r.State != admission.Approved {
 		t.Fatalf("row after un-blocking = %+v", r)
 	}
+	e.refresh()
 	e.want("this machine, until")
 }
 
@@ -581,11 +743,11 @@ func TestUIEachButtonActsOnItsOwnRow(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	e.openSettings()
 	e.refresh()
 	e.want(a.String(), b.String())
 
 	e.click("Block " + a.String())
+	e.idle()
 	if r, _ := clientRow(e.gate, a); r.State != admission.Blocked {
 		t.Fatalf("a=%+v: Block on a's row acted on the wrong node", r)
 	}
@@ -593,6 +755,7 @@ func TestUIEachButtonActsOnItsOwnRow(t *testing.T) {
 		t.Fatalf("b=%+v: Block on a's row changed b", r)
 	}
 	e.click("Approve " + a.String())
+	e.idle()
 	if r, _ := clientRow(e.gate, a); r.State != admission.Approved {
 		t.Fatalf("a=%+v after Approve on a's row", r)
 	}
@@ -600,7 +763,7 @@ func TestUIEachButtonActsOnItsOwnRow(t *testing.T) {
 
 func TestUIEmptyListsSayNone(t *testing.T) {
 	e := newUI(t, true, nil)
-	e.openSettings()
+	e.refresh()
 	got := 0
 	for _, s := range e.tt.Texts() {
 		if s == "None" {
@@ -616,7 +779,6 @@ func TestUIEmptyListsSayNone(t *testing.T) {
 // made elsewhere (a connection arriving) shows after a refresh.
 func TestUIListsFollowTheGateAfterARefresh(t *testing.T) {
 	e := newUI(t, true, nil)
-	e.openSettings()
 	e.wantNot("no certificate")
 
 	k := key.NewNode().Public()
@@ -636,7 +798,6 @@ func TestUIBlockedRowsOfferOnlyApprove(t *testing.T) {
 	e := newUI(t, true, nil)
 	k := key.NewNode().Public()
 	e.gate.Block(k)
-	e.openSettings()
 	e.refresh()
 	e.want("Blocked", k.String(), "Approve")
 	e.wantNot("Block ", "None\nNone\nNone")
@@ -657,7 +818,7 @@ func TestUIBlockedRowsOfferOnlyApprove(t *testing.T) {
 
 // A text received on the port is saved, shown in a notification, and listed in
 // the Inbox, where it can be copied and deleted. Clicking its notification
-// opens the Inbox.
+// opens the self page, which holds the Inbox.
 func TestUIReceivedTextInbox(t *testing.T) {
 	e := newUI(t, false, nil)
 	// The receive path queues its UI work here, and the test runs it on its own
@@ -695,8 +856,18 @@ func TestUIReceivedTextInbox(t *testing.T) {
 		t.Fatalf("notification %q / %q, want the sender and the text", note.Title, note.Body)
 	}
 
+	// The click lands on the self page, whatever page was open.
+	e.app.goTo(page{kind: pageSettings})
 	e.app.notificationClicked(note.ID)
-	pump(func() bool { return e.app.showInbox })
+	select {
+	case fn := <-queue:
+		fn()
+	case <-time.After(5 * time.Second):
+		t.Fatal("the Inbox was not reloaded after the click")
+	}
+	if e.app.page != (page{}) {
+		t.Fatalf("page = %+v after the click, want the self page", e.app.page)
+	}
 	e.tt.Frame()
 	e.want("Inbox", "100.64.0.9:4000", body)
 
@@ -706,8 +877,62 @@ func TestUIReceivedTextInbox(t *testing.T) {
 	}
 
 	e.click("Delete text")
-	if len(e.app.inbox) != 0 {
-		t.Fatalf("%d texts left after delete", len(e.app.inbox))
-	}
+	pump(func() bool { return len(e.app.inbox) == 0 })
+	e.tt.Frame()
 	e.wantNot(body)
+}
+
+// While Connect is pending the tile says so, and the rest of the window keeps
+// answering. A second click on the busy tile starts no second Connect, and
+// releasing the dial connects.
+func TestSlowConnectDoesNotBlockTheUI(t *testing.T) {
+	h := state.Host{Name: "lab", Address: testAddress(t)}
+	slow := &toggleConnector{name: "Plain", hold: make(chan struct{})}
+	e := newUI(t, false, []state.Host{h}, slow)
+	e.click("lab")
+	e.click("Plain launcher")
+
+	e.want("Plain…")
+	e.click("Settings")
+	e.want("Database")
+	e.click("lab")
+	e.want("Plain…")
+	e.click("Plain launcher")
+
+	close(slow.hold)
+	e.idle()
+	if slow.connects != 1 {
+		t.Fatalf("connects = %d, want the one pending Connect", slow.connects)
+	}
+	if len(e.app.connections[h.Address]) != 1 || e.status() != "Plain connected" {
+		t.Fatalf("connections=%v status=%q", e.app.connections, e.status())
+	}
+}
+
+// Removing a host while its Connect is pending disconnects the client that the
+// Connect hands back late, and keeps it out of the connections.
+func TestRemovingAHostDisconnectsALateConnect(t *testing.T) {
+	h := state.Host{Name: "lab", Address: testAddress(t)}
+	other := state.Host{Name: "keep", Address: testAddress(t)}
+	slow := &toggleConnector{name: "Plain", hold: make(chan struct{}), gone: make(chan struct{})}
+	e := newUI(t, false, []state.Host{h, other}, slow)
+	e.click("lab")
+	e.click("Plain launcher")
+
+	e.click("Remove host")
+	e.dialog("Remove lab?").click("Yes")
+	close(slow.hold)
+	e.idle()
+
+	select {
+	case <-slow.gone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the late client was not disconnected")
+	}
+	if len(slow.clients) != 1 || slow.clients[0].disconnects != 1 {
+		t.Fatalf("late clients = %d, want one, disconnected once", len(slow.clients))
+	}
+	if len(e.app.connections[h.Address]) != 0 || len(e.app.hosts) != 1 {
+		t.Fatalf("connections=%v hosts=%+v", e.app.connections, e.app.hosts)
+	}
 }

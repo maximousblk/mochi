@@ -64,10 +64,10 @@ A connection that is still open counts as in use.
 
 ## Settings
 
-Right-click the SSH tile and choose **Configure…**. On the Settings page this
+Right-click the SSH tile and choose **Configure…**. On the **This device** page this
 edits this machine's server; on a host's page it edits that host's client.
 
-Server fields (Settings page):
+Server fields (This device page):
 
 - **Tailcat port** (`port`), default `22022`: the port the SSH server serves.
 

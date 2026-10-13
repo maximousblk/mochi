@@ -115,7 +115,7 @@ func TestConnectCopiesTheShareAddress(t *testing.T) {
 
 	var copied string
 	c := newConnector(connector.NewPorts(), func(s string) { copied = s }, nil, admission.Dialing{Key: key.NewNode()}, t.Logf)
-	client, err := c.Connect(state.Host{Name: "lab", Address: testharness.Address(server)}, connector.Config{"port": strconv.Itoa(int(ServePort))})
+	client, err := c.Connect(state.Host{Name: "lab", Address: testharness.Address(server)}, connector.Config{"port": strconv.Itoa(int(ServePort))}, func(error) {})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

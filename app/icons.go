@@ -37,6 +37,11 @@ var trashIconData []byte
 
 var trashIcon = ui.MustParseSVG(trashIconData)
 
+//go:embed resources/settings.svg
+var settingsIconData []byte
+
+var settingsIcon = ui.MustParseSVG(settingsIconData)
+
 //go:embed resources/clipboard.svg
 var clipboardIconData []byte
 

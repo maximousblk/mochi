@@ -1,5 +1,6 @@
-// Package app is Mochi's window: the host list, the launchers, Settings, and the
-// tray icon that keeps the app running while the window is closed.
+// Package app is Mochi's window: this device's page, the host pages, the
+// launchers, the dialogs that open in their own windows, and the tray icon that
+// keeps the app running while the window is closed.
 package app
 
 import (
@@ -29,23 +30,31 @@ import (
 	"tailscale.com/tailcfg"
 )
 
+// pageKind is which page the main window shows. The zero value is the self page,
+// which is the page the app opens on.
+type pageKind int
+
+const (
+	pageSelf pageKind = iota
+	pageSettings
+	pageAddHost
+	pageHost
+)
+
+// page is the main window's current page. address is the host a pageHost shows.
+type page struct {
+	kind    pageKind
+	address string
+}
+
 type app struct {
 	hosts         []state.Host
-	selectedHost  string
-	addingHost    bool
-	showSettings  bool
+	page          page
 	nameDraft     string
 	addrDraft     string
 	status        string
-	confirmRemove bool
-	sendOpen      bool
-	sendBody      string
-	sendPort      string
-	sendBusy      bool
-	config        configForm
 	serverAddr    string
 	serverEnabled bool
-	serverBusy    bool
 	server        *tailcat.Server
 	gate          *admission.Gate
 	stopGate      context.CancelFunc
@@ -54,21 +63,24 @@ type app struct {
 	trusted       []ed25519.PublicKey
 	certDraft     string
 	clients       map[string][]admission.Client
+	// clientsReload runs the reads of clients off the UI thread, one at a time,
+	// with a read after the last request so the lists catch up with a change.
+	clientsReload reload
 	store         *state.StateStore
 	lastTrayClick time.Time // when the tray icon was last clicked, for double clicks
 	connectors    []connector.Connector
-	// servers is every launcher's server side, in the order Settings shows
-	// them: the connectors, then the Send text receiver.
+	// servers is every launcher's server side, in the order the Settings page
+	// shows them: the connectors, then the Send text receiver.
 	servers  []connector.Server
 	ports    *connector.Ports
 	window   *mygo.Window
 	tray     *mygo.Tray
 	quitting bool
 
-	// inbox is the saved texts, newest first, as the Inbox page shows them.
-	// showInbox is the Inbox page, which like Settings replaces the host view.
-	inbox     []state.ReceivedText
-	showInbox bool
+	// inbox is the saved texts, newest first, as the self page's Inbox shows them.
+	// inboxReload runs their reads the same way clientsReload does.
+	inbox       []state.ReceivedText
+	inboxReload reload
 
 	// serving is each launcher's server-side switch, by name, as the app last
 	// set it. connections holds the clients open now, by host address and then
@@ -76,8 +88,16 @@ type app struct {
 	serving     map[string]bool
 	connections map[string]map[string]connector.Client
 
+	// busy holds the operations running off the UI thread, by busy key. The view
+	// shows an operation as busy and starts nothing new under the same key.
+	busy map[string]bool
+
+	// dialogs holds the open dialog windows, by dialog key. Each dialog has its
+	// own window, so the main window stays usable while they are open.
+	dialogs map[string]dialog
+
 	// pageScroll is where the content scrolls, so the app can bring it back to
-	// the top, as the Settings page needs after a switch is flipped.
+	// the top when the page changes.
 	pageScroll ui.ScrollState
 
 	// unhealthy names the launchers that are not healthy, as of the last check.
@@ -92,6 +112,7 @@ type app struct {
 	serveExtra func(port uint16) func(net.Conn)     // more ports for the server to serve
 	copyText   func(string)                         // copies text; mygo's clipboard when nil
 	notify     func(mygo.NotificationOptions) error // shows a notification; mygo's when nil
+	openWindow func(title string, w, h int, view func(*ui.Context)) dialogWindow
 }
 
 // Run starts the app and blocks until it exits. args are the command-line
@@ -172,7 +193,8 @@ func Run(args []string) error {
 }
 
 // load reads everything the app starts from out of store: hosts, the server
-// setting, this machine's identity, the trusted keys and the launchers.
+// setting, this machine's identity, the trusted keys and the launchers. It runs
+// before the window opens, so it may read and listen synchronously.
 func (a *app) load(store *state.StateStore) (err error) {
 	a.store = store
 	if a.hosts, err = store.Hosts(); err != nil {
@@ -206,7 +228,11 @@ func (a *app) load(store *state.StateStore) (err error) {
 		on, err := store.BoolSetting(connector.SettingKey(c))
 		switch {
 		case err == nil && on:
-			if err := c.Listen(a.configFor(connector.ServerConfigKey(c), c.Name(), c.ServerFields())); err != nil {
+			cfg, cerr := a.loadConfig(connector.ServerConfigKey(c), c.ServerFields())
+			if cerr != nil {
+				a.status = c.Name() + " settings not loaded, using defaults: " + cerr.Error()
+			}
+			if err := c.Listen(cfg); err != nil {
 				a.status = c.Name() + " server not started: " + err.Error()
 			} else {
 				a.serving[c.Name()] = true
@@ -218,9 +244,6 @@ func (a *app) load(store *state.StateStore) (err error) {
 		case !errors.Is(err, sql.ErrNoRows):
 			return fmt.Errorf("loading %s server setting: %w", c.Name(), err)
 		}
-	}
-	if len(a.hosts) > 0 {
-		a.selectedHost = a.hosts[0].Address
 	}
 	return nil
 }
@@ -234,14 +257,22 @@ func newConnectors(ports *connector.Ports, seed []byte, copyText func(string), d
 	}
 }
 
-// update runs fn on the UI thread. Tests set runOnUI to run it where they
-// can step the view; with neither it is the window's.
+// update runs fn on the UI thread, then redraws every open window. The dialogs
+// read the same state as the main window, so each one is redrawn too. Tests set
+// runOnUI to run fn where they can step the view; with neither it is the
+// window's.
 func (a *app) update(fn func()) {
+	redraw := func() {
+		fn()
+		for _, d := range a.dialogs {
+			d.win.Invalidate()
+		}
+	}
 	if a.runOnUI != nil {
-		a.runOnUI(fn)
+		a.runOnUI(redraw)
 		return
 	}
-	a.window.Update(fn)
+	a.window.Update(redraw)
 }
 
 // copyToClipboard puts text on the clipboard.
@@ -288,24 +319,45 @@ func (a *app) watchHealth() {
 	}
 }
 
+// serveOp is the busy key of turning the server side of launcher name on or off.
+func serveOp(name string) string { return "serve|" + name }
+
 // toggleServing turns a launcher's server side on or off, and saves its switch.
+// Listening reads the launcher's config and may bind a port, so it runs off the
+// UI thread as the launcher's busy operation.
 func (a *app) toggleServing(lc connector.Server) {
-	on := a.serving[lc.Name()]
-	var err error
-	if on {
-		err = lc.Stop()
-	} else {
-		err = lc.Listen(a.configFor(connector.ServerConfigKey(lc), lc.Name(), lc.ServerFields()))
-	}
-	if err != nil {
-		a.status = lc.Name() + " server not changed: " + err.Error()
-	} else {
-		a.serving[lc.Name()] = !on
-		if err := a.store.SetBool(connector.SettingKey(lc), !on); err != nil {
-			a.status = "Saving " + lc.Name() + " setting failed: " + err.Error()
+	name := lc.Name()
+	on := a.serving[name]
+	key := connector.ServerConfigKey(lc)
+	var warn, saveErr error
+	a.async(serveOp(name), func() error {
+		if on {
+			if err := lc.Stop(); err != nil {
+				return err
+			}
+		} else {
+			cfg, err := a.loadConfig(key, lc.ServerFields())
+			warn = err
+			if err := lc.Listen(cfg); err != nil {
+				return err
+			}
 		}
-	}
-	a.checkHealth()
+		saveErr = a.store.SetBool(connector.SettingKey(lc), !on)
+		return nil
+	}, func(err error) {
+		if warn != nil {
+			a.status = name + " settings not loaded, using defaults: " + warn.Error()
+		}
+		if err != nil {
+			a.status = name + " server not changed: " + err.Error()
+			return
+		}
+		a.serving[name] = !on
+		if saveErr != nil {
+			a.status = "Saving " + name + " setting failed: " + saveErr.Error()
+		}
+		a.checkHealth()
+	})
 }
 
 func (a *app) showWindow() {
@@ -335,8 +387,11 @@ func (a *app) trayClicked() {
 	a.lastTrayClick = now
 }
 
+// exit quits the app. The dialog windows close with it, and the connections
+// are disconnected before the store closes.
 func (a *app) exit() {
 	a.quitting = true
+	a.closeAllDialogs()
 	a.disconnectAll()
 	if a.stopGate != nil {
 		a.stopGate()
@@ -351,7 +406,12 @@ func (a *app) exit() {
 	mygo.App.Quit()
 }
 
+// addHost saves the host typed on the Add host page, off the UI thread, then
+// shows the new host's page.
 func (a *app) addHost() {
+	if a.busy["host-add"] {
+		return
+	}
 	if a.nameDraft == "" || a.addrDraft == "" {
 		a.status = "Host name and address are required"
 		return
@@ -360,139 +420,185 @@ func (a *app) addHost() {
 		a.status = fmt.Sprintf("Invalid Tailcat address: %v", err)
 		return
 	}
-	a.hosts = append(a.hosts, state.Host{Name: a.nameDraft, Address: a.addrDraft})
-	a.selectedHost = a.addrDraft
-	a.addingHost = false
-	a.showSettings = false
-	a.showInbox = false
-	a.nameDraft, a.addrDraft = "", ""
-	if err := a.store.AddHost(a.hosts[len(a.hosts)-1]); err != nil {
-		a.status = fmt.Sprintf("Host added, but save failed: %v", err)
-		a.hosts = a.hosts[:len(a.hosts)-1]
-		return
-	}
-	a.status = "Host added"
+	host := state.Host{Name: a.nameDraft, Address: a.addrDraft}
+	a.status = "Adding host…"
+	a.async("host-add", func() error {
+		return a.store.AddHost(host)
+	}, func(err error) {
+		if err != nil {
+			a.status = fmt.Sprintf("Host not added: %v", err)
+			return
+		}
+		a.hosts = append(a.hosts, host)
+		a.page = page{kind: pageHost, address: host.Address}
+		a.nameDraft, a.addrDraft = "", ""
+		a.status = "Host added"
+	})
 }
 
-func (a *app) removeHost(index int) error {
-	if index < 0 || index >= len(a.hosts) {
-		return nil
-	}
-	host := a.hosts[index]
-	if err := a.disconnectHost(host.Address); err != nil {
-		return err
-	}
-	if err := a.store.DeleteHost(host.Address); err != nil {
-		return fmt.Errorf("delete host from state: %w", err)
-	}
-	if err := a.deleteClientConfigs(host.Address); err != nil {
-		return err
-	}
-	a.hosts = append(a.hosts[:index], a.hosts[index+1:]...)
-	if a.selectedHost == host.Address {
-		a.selectedHost = ""
-	}
-	a.status = "Host removed"
-	return nil
-}
-
-func (a *app) startServer() {
-	if a.server != nil || a.serverBusy {
+// removeHost removes the host at address. It runs off the UI thread, after the
+// host's connections are closed: the connections are detached here and
+// disconnected there. failed runs on the UI thread only when the removal fails,
+// so the Remove dialog can show why. On success the host's dialogs are closed,
+// because their targets no longer exist.
+func (a *app) removeHost(address string, failed func(error)) {
+	op := hostRemoveOp(address)
+	if a.busy[op] {
 		return
 	}
-	a.serverBusy = true
-	a.status = "Starting server…"
+	clients := a.detachHost(address)
+	a.async(op, func() error {
+		var errs []error
+		for _, client := range clients {
+			if err := client.Disconnect(); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if err := errors.Join(errs...); err != nil {
+			return fmt.Errorf("disconnect host: %w", err)
+		}
+		if err := a.store.DeleteHost(address); err != nil {
+			return fmt.Errorf("delete host from state: %w", err)
+		}
+		return a.deleteClientConfigs(address)
+	}, func(err error) {
+		if err != nil {
+			a.status = "Remove failed: " + err.Error()
+			if failed != nil {
+				failed(err)
+			}
+			return
+		}
+		for i, h := range a.hosts {
+			if h.Address == address {
+				a.hosts = append(a.hosts[:i], a.hosts[i+1:]...)
+				break
+			}
+		}
+		if a.page.kind == pageHost && a.page.address == address {
+			a.page = page{}
+		}
+		a.closeHostDialogs(address)
+		a.status = "Host removed"
+	})
+}
+
+// launchServer starts the Tailcat server and its admission gate. It does the
+// blocking work, so it runs off the UI thread and touches no app state.
+func (a *app) launchServer() (*tailcat.Server, *admission.Gate, context.CancelFunc, error) {
+	psk, region, err := a.store.ServerParams()
+	if err == nil && region == 0 && a.relay == nil {
+		// Choosing a relay region takes seconds and may differ between
+		// starts, so it is done once and saved: it keeps the address.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		region, err = server.PickRegion(ctx)
+		cancel()
+		if err == nil {
+			err = a.store.SaveRegion(region)
+		}
+	}
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	gate, err := admission.NewGate(a.store.DB(), a.identity.Private(), a.trusted)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	s := &tailcat.Server{Key: a.identity.NodeKey(state.RoleServer), PresharedKey: psk, RegionID: region, Region: a.relay}
+	gate.Install(s, func(port uint16) func(net.Conn) {
+		if a.serveExtra != nil {
+			if h := a.serveExtra(port); h != nil {
+				return h
+			}
+		}
+		return a.ports.Handler(port)
+	})
+	if err := s.Start(); err != nil {
+		return nil, nil, nil, err
+	}
+	runCtx, stop := context.WithCancel(context.Background())
+	go gate.Run(runCtx)
 	go func() {
-		fail := func(err error) {
+		t := time.NewTicker(2 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-runCtx.Done():
+				return
+			case <-t.C:
+				a.update(func() {
+					if a.page.kind == pageSelf {
+						a.reloadClients()
+					}
+				})
+			}
+		}
+	}()
+	return s, gate, stop, nil
+}
+
+// startServer starts the server off the UI thread, as the server's busy
+// operation. A start that fails turns the server switch back off.
+func (a *app) startServer() {
+	if a.server != nil || a.busy["server"] {
+		return
+	}
+	a.status = "Starting server…"
+	var s *tailcat.Server
+	var gate *admission.Gate
+	var stop context.CancelFunc
+	a.async("server", func() error {
+		var err error
+		s, gate, stop, err = a.launchServer()
+		if err != nil {
 			log.Printf("server failed to start: %v", err)
-			a.update(func() {
-				a.serverBusy = false
-				a.serverEnabled = false
-				_ = a.store.SetBool("server_enabled", false)
-				a.status = "Server failed: " + err.Error()
-			})
+			_ = a.store.SetBool("server_enabled", false)
 		}
-		psk, region, err := a.store.ServerParams()
-		if err == nil && region == 0 && a.relay == nil {
-			// Choosing a relay region takes seconds and may differ between
-			// starts, so it is done once and saved: it keeps the address.
-			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-			region, err = server.PickRegion(ctx)
-			cancel()
-			if err == nil {
-				err = a.store.SaveRegion(region)
-			}
-		}
+		return err
+	}, func(err error) {
 		if err != nil {
-			fail(err)
+			a.serverEnabled = false
+			a.status = "Server failed: " + err.Error()
 			return
 		}
-		gate, err := admission.NewGate(a.store.DB(), a.identity.Private(), a.trusted)
-		if err != nil {
-			fail(err)
-			return
-		}
-		s := &tailcat.Server{Key: a.identity.NodeKey(state.RoleServer), PresharedKey: psk, RegionID: region, Region: a.relay}
-		gate.Install(s, func(port uint16) func(net.Conn) {
-			if a.serveExtra != nil {
-				if h := a.serveExtra(port); h != nil {
-					return h
-				}
-			}
-			return a.ports.Handler(port)
-		})
-		if err := s.Start(); err != nil {
-			fail(err)
-			return
-		}
-		runCtx, stop := context.WithCancel(context.Background())
-		go gate.Run(runCtx)
-		go func() {
-			t := time.NewTicker(2 * time.Second)
-			defer t.Stop()
-			for {
-				select {
-				case <-runCtx.Done():
-					return
-				case <-t.C:
-					a.update(func() {
-						if a.showSettings {
-							a.refreshClients()
-						}
-					})
-				}
-			}
-		}()
+		a.server = s
+		a.gate, a.stopGate = gate, stop
+		a.serverAddr = string(s.TailcatAddr())
+		a.status = "Server started"
+		a.reloadClients()
+	})
+}
+
+// serverSwitched runs when the server switch changes: it saves the setting off
+// the UI thread, then starts or stops the server to match the switch as it is
+// when the save finishes, so the last flip wins.
+func (a *app) serverSwitched() {
+	if a.busy["server"] {
+		return
+	}
+	on := a.serverEnabled
+	go func() {
+		err := a.store.SetBool("server_enabled", on)
 		a.update(func() {
-			a.serverBusy = false
-			a.server = s
-			a.gate, a.stopGate = gate, stop
-			a.serverAddr = string(s.TailcatAddr())
-			a.status = "Server started"
+			if err != nil {
+				a.status = "Saving server setting failed: " + err.Error()
+				return
+			}
+			if a.serverEnabled {
+				a.startServer()
+			} else {
+				a.stopServer()
+			}
 		})
 	}()
 }
 
-// serverSwitched runs when the Settings switch changes: it saves the setting
-// and starts or stops the server, unless a start or stop is already running.
-func (a *app) serverSwitched() {
-	if a.serverBusy {
-		return
-	}
-	if err := a.store.SetBool("server_enabled", a.serverEnabled); err != nil {
-		a.status = "Saving server setting failed: " + err.Error()
-	} else if a.serverEnabled {
-		a.startServer()
-	} else {
-		a.stopServer()
-	}
-}
-
+// stopServer stops the server. The gate stops at once, so no client is admitted
+// while the server closes; the close itself runs off the UI thread.
 func (a *app) stopServer() {
-	if a.server == nil || a.serverBusy {
+	if a.server == nil || a.busy["server"] {
 		return
 	}
-	a.serverBusy = true
 	s := a.server
 	a.server = nil
 	if a.stopGate != nil {
@@ -502,17 +608,13 @@ func (a *app) stopServer() {
 	a.clients = nil
 	a.serverAddr = ""
 	a.status = "Stopping server…"
-	go func() {
-		if err := s.Close(); err != nil {
-			a.update(func() {
-				a.serverBusy = false
-				a.status = "Server stop failed: " + err.Error()
-			})
+	a.async("server", func() error {
+		return s.Close()
+	}, func(err error) {
+		if err != nil {
+			a.status = "Server stop failed: " + err.Error()
 			return
 		}
-		a.update(func() {
-			a.serverBusy = false
-			a.status = "Server stopped"
-		})
-	}()
+		a.status = "Server stopped"
+	})
 }

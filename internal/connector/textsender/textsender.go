@@ -27,7 +27,7 @@ const linger = 3 * time.Second
 // given: their listeners accept any port and hand the stream to the app.
 const DefaultPort = 1
 
-// ParsePort returns the port typed in the popup, or DefaultPort if it is empty.
+// ParsePort returns the port typed in the window, or DefaultPort if it is empty.
 func ParsePort(s string) (uint16, error) {
 	if s == "" {
 		return DefaultPort, nil

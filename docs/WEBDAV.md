@@ -52,10 +52,10 @@ Errors are written to `webdav.log` beside `mochi.db`. Start Mochi with
 
 ## Settings
 
-Right-click the WebDAV tile and choose **Configure…**. On the Settings page this
+Right-click the WebDAV tile and choose **Configure…**. On the **This device** page this
 edits this machine's server; on a host's page it edits that host's client.
 
-Server fields (Settings page):
+Server fields (This device page):
 
 - **Tailcat port** (`port`), default `8080`: the port the WebDAV server serves.
 - **Shared folder** (`folder`), default the home volume root: the folder served.

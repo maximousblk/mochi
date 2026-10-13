@@ -43,7 +43,7 @@ that refuses a certificate lists the CAs it trusts, so the client can see why.
 
 ## Pending approval
 
-Under **Pending approval** in Settings, **Approve** signs a 24-hour certificate
+Under **Pending approval** on the **This device** page, **Approve** signs a 24-hour certificate
 with this machine's own key. The host renews it, so the approval lasts until
 **Block**.
 

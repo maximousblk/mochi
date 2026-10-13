@@ -120,7 +120,7 @@ func (c *Connector) Healthy() bool {
 // it through the tunnel. The host key is matched by the host's node key, so
 // ssh's known hosts do not depend on the loopback address. A user name in cfg is
 // put in front of the loopback address, which selects the account on the host.
-func (c *Connector) Connect(host state.Host, cfg connector.Config) (connector.Client, error) {
+func (c *Connector) Connect(host state.Host, cfg connector.Config, _ func(error)) (connector.Client, error) {
 	info, err := connector.ParseHost(host.Address)
 	if err != nil {
 		return nil, err

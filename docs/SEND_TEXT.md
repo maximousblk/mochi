@@ -7,7 +7,7 @@ opens the **Inbox**, where each text has a Copy button and a delete button.
 
 ## Receiving (server side)
 
-Turn on **Send text** under **Settings > Connectors**. Mochi then listens on
+Turn on **Send text** on the **This device** page. Mochi then listens on
 port 1 of its Tailcat server. The switch is saved, so it stays on across
 restarts. The tile is yellow when the switch is on but the app cannot show
 notifications, since texts would go unseen.
@@ -36,28 +36,28 @@ status bar says so.
 
 ## Inbox
 
-The sidebar's **Inbox** button shows the number of saved texts. The page lists
+The **Inbox** section of the **This device** page shows the number of saved texts. The section lists
 them newest first, with the sender, the local time, the text, and a Copy button
 and a delete button for each. Clicking a Send text notification opens the Inbox.
 
 ## Sending (client side)
 
-On a host's page, the **Send text** tile opens a dialog. It sends the body to
+On a host's page, the **Send text** tile opens a Send text window. It sends the body to
 the host's port, which defaults to 1, and reports the outcome. A client must be
 approved by the host like any other connection, and a send to a host that has
 Send text off is not saved anywhere.
 
 ## Settings
 
-Right-click the Send text tile and choose **Configure…**. On the Settings page
+Right-click the Send text tile and choose **Configure…**. On the **This device** page
 this edits this machine's receiver; on a host's page it edits that host's
 client.
 
-Server field (Settings page):
+Server field (This device page):
 
 - **Tailcat port** (`port`), default `1`: the port the receiver listens on.
 
 Client field (host page, saved per host):
 
-- **Default port** (`port`), default `1`: the port the Send text dialog fills
-  in for that host. The dialog's Port box can still be changed per send.
+- **Default port** (`port`), default `1`: the port the Send text window fills
+  in for that host. The window's Port box can still be changed per send.

@@ -53,6 +53,8 @@ type node struct {
 	theme  ui.Theme // the theme the last frame was drawn with
 	copied string   // the last text a launcher copied
 
+	windows windowSet // the dialog windows the app opened, drawn by their own testers
+
 	mu       sync.Mutex
 	received map[uint16][]byte // what the server's extra ports were sent
 }
@@ -79,6 +81,9 @@ func newNode(t *testing.T, name, dir string, relay *tailcfg.DERPRegion, trusted 
 		runOnUI:  func(fn func()) { n.q <- fn },
 		openPath: func(p string) error { n.opened = append(n.opened, p); return nil },
 		copyText: func(s string) { n.copied = s },
+
+		// Dialogs open as windows the test reads, instead of native ones.
+		openWindow: n.windows.open,
 		// No desktop notifications in tests; the Inbox still gets the text.
 		notify: func(mygo.NotificationOptions) error { return nil },
 		serveExtra: func(port uint16) func(net.Conn) {
@@ -246,7 +251,7 @@ func (n *node) wantNot(texts ...string) {
 
 func (n *node) settings() {
 	n.t.Helper()
-	n.click("⚙  Settings")
+	n.click("Settings")
 	n.want("Machine key")
 }
 
@@ -285,7 +290,7 @@ func (n *node) toggleServer() {
 // startServer turns the server on from Settings and returns its address.
 func (n *node) startServer() string {
 	n.t.Helper()
-	n.settings()
+	n.self()
 	if n.app.serverAddr != "" {
 		n.t.Fatalf("%s: server already running", n.name)
 	}
@@ -314,20 +319,79 @@ func (n *node) addHost(name, addr string) {
 	n.want("Launchers")
 }
 
-// sendText sends body to port of the selected host through the popup, and
-// waits for the outcome.
+// sendText sends body to port of the open host through its Send text window,
+// and waits for the outcome. The window is opened first when it is not open.
 func (n *node) sendText(port, body string, within time.Duration) string {
 	n.t.Helper()
-	if !n.exact("Send text to " + n.app.selectedHostName()) { // a failed send leaves the dialog open
+	title := "Send text to " + n.app.selectedHostName()
+	if !n.dialogOpen(title) {
 		n.click("Send text launcher")
+		n.until("the Send text window", within, func() bool { return n.dialogOpen(title) })
 	}
-	n.fill("Port", port, func() string { return n.app.sendPort })
-	n.fill("Text to send", body, func() string { return n.app.sendBody })
-	n.click("Send")
+	d := n.dialog(title)
+	d.replace("Port", port)
+	d.replace("Text to send", body)
+	address := n.app.page.address
+	d.click("Send")
 	n.until("the send to finish", within, func() bool {
-		return !n.app.sendBusy && !strings.HasPrefix(n.app.status, "Sending")
+		return !n.app.busy[sendKey(address)] && !strings.HasPrefix(n.app.status, "Sending")
 	})
+	// A failed send keeps its window open and shows the error there, not in the
+	// status bar, so the outcome is read from the window.
+	d.tt.Frame()
+	for _, text := range d.tt.Texts() {
+		if strings.HasPrefix(text, "Send failed") {
+			return text
+		}
+	}
 	return n.app.status
+}
+
+// dialogOpen reports whether the dialog window titled title is open.
+func (n *node) dialogOpen(title string) bool {
+	w := n.windows.find(title)
+	return w != nil && !w.closed
+}
+
+// dialog is the view of the dialog window titled title: the same app, drawn and
+// clicked through that window.
+func (n *node) dialog(title string) *node {
+	n.t.Helper()
+	w := n.windows.find(title)
+	if w == nil || w.closed {
+		n.t.Fatalf("%s: no open dialog %q; visible: %q", n.name, title, n.tt.Texts())
+	}
+	return &node{t: n.t, name: n.name + " " + title, app: n.app, tt: w.tt, q: n.q, theme: n.theme}
+}
+
+// replace makes the field labeled label hold exactly text.
+func (n *node) replace(label, text string) {
+	n.t.Helper()
+	n.click(label)
+	n.tt.Key(ui.Ctrl, ui.KeyA)
+	n.tt.Type(text)
+	n.pump()
+}
+
+// idle waits until no operation is running on the app.
+func (n *node) idle(within time.Duration) {
+	n.t.Helper()
+	n.until("the running operations", within, func() bool {
+		for _, busy := range n.app.busy {
+			if busy {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+// self opens the self page from its title, where the server, the client lists
+// and the Inbox are.
+func (n *node) self() {
+	n.t.Helper()
+	n.click(selfTitle())
+	n.want("Enable Tailcat server")
 }
 
 func (n *node) enabledTile(label string) bool {
@@ -342,7 +406,7 @@ func (n *node) enabledTile(label string) bool {
 // selectedHostName is the name of the host whose page is open, or "".
 func (a *app) selectedHostName() string {
 	for _, h := range a.hosts {
-		if h.Address == a.selectedHost {
+		if h.Address == a.page.address {
 			return h.Name
 		}
 	}
@@ -379,16 +443,19 @@ func TestApplication(t *testing.T) {
 			t.Fatalf("the server address does not parse: %v", err)
 		}
 		host.want("Pending approval", "Approved", "Blocked")
-		// The SSH launcher's switch on the host's Settings page turns its server on.
+		// The SSH launcher's switch on the host's self page turns its server on.
 		host.click("SSH launcher")
+		host.idle(time.Minute)
 		if !host.app.serving["SSH"] {
-			t.Fatal("the SSH server did not turn on from Settings")
+			t.Fatal("the SSH server did not turn on")
 		}
 		// The database folder can be opened from Settings.
+		host.settings()
 		host.click("Open containing folder")
 		if len(host.opened) != 1 || host.opened[0] != host.dir {
 			t.Fatalf("opened %q, want the state folder %q", host.opened, host.dir)
 		}
+		host.self()
 	})
 
 	step("alice adds the host from its address", func(t *testing.T) {
@@ -417,8 +484,10 @@ func TestApplication(t *testing.T) {
 	})
 
 	step("the admin approves it from the list", func(t *testing.T) {
+		host.self()
 		host.click("Approve")
 		host.until("approval", 5*time.Second, func() bool { return strings.HasPrefix(host.app.status, "Approved ") })
+		host.until("the approved row", 5*time.Second, func() bool { return host.has("this machine, until") })
 		host.want(alice.clientKey().String(), "this machine, until")
 		host.wantNot("no certificate")
 		if r, ok := clientRow(host.app.gate, alice.clientKey()); !ok || r.State != admission.Approved || r.CA != host.app.gate.SelfFingerprint() {
@@ -431,13 +500,14 @@ func TestApplication(t *testing.T) {
 		if status != "Sent 5 bytes to lab port 9000" {
 			t.Fatalf("status = %q", status)
 		}
-		alice.until("the dialog to close", 5*time.Second, func() bool { return !alice.exact("Send text to lab") })
+		alice.until("the dialog to close", 5*time.Second, func() bool { return !alice.dialogOpen("Send text to lab") })
 		host.until("the text to arrive", 10*time.Second, func() bool { return host.sentTo(9000) == "hello" })
 	})
 
 	step("the host's Send text switch puts alice's text in the host's Inbox", func(t *testing.T) {
-		host.settings()
+		host.self()
 		host.click("Send text launcher")
+		host.idle(time.Minute)
 		if !host.app.serving["Send text"] {
 			t.Fatal("the Send text switch is not on")
 		}
@@ -446,12 +516,12 @@ func TestApplication(t *testing.T) {
 			t.Fatalf("status = %q", status)
 		}
 		host.until("the text in the Inbox", 10*time.Second, func() bool { return len(host.app.inbox) == 1 })
-		host.click(host.app.inboxLabel())
 		host.want("Inbox", "to the inbox")
 	})
 
 	step("the SSH launcher tunnels to the host's SSH server and copies the command that reaches it", func(t *testing.T) {
 		alice.click("SSH launcher")
+		alice.idle(time.Minute)
 		if alice.app.status != "SSH connected" {
 			t.Fatalf("status = %q", alice.app.status)
 		}
@@ -478,6 +548,7 @@ func TestApplication(t *testing.T) {
 			t.Fatalf("the tunnel delivered %q, err %v; want an SSH banner", buf, err)
 		}
 		alice.click("SSH launcher")
+		alice.idle(time.Minute)
 		if alice.app.status != "SSH disconnected" || alice.enabledTile("SSH launcher") {
 			t.Fatalf("status %q after disconnecting", alice.app.status)
 		}
@@ -486,6 +557,7 @@ func TestApplication(t *testing.T) {
 	step("the RustDesk launcher forwards the host's direct-IP port and starts the client", func(t *testing.T) {
 		argsFile := testharness.FakeRustDesk(t)
 		alice.click("RustDesk launcher")
+		alice.idle(time.Minute)
 		if alice.app.status != "RustDesk connected" {
 			t.Fatalf("status = %q", alice.app.status)
 		}
@@ -517,6 +589,7 @@ func TestApplication(t *testing.T) {
 		conn.Close()
 
 		alice.click("RustDesk launcher")
+		alice.idle(time.Minute)
 		if alice.app.status != "RustDesk disconnected" {
 			t.Fatalf("status = %q", alice.app.status)
 		}
@@ -535,6 +608,7 @@ func TestApplication(t *testing.T) {
 		bob.settings()
 		bob.typeInto("Certificate", hex.EncodeToString(cert))
 		bob.click("Add")
+		bob.idle(time.Minute)
 		if bob.app.status != "Certificate saved" {
 			t.Fatalf("status = %q", bob.app.status)
 		}
@@ -544,7 +618,7 @@ func TestApplication(t *testing.T) {
 			t.Fatalf("status = %q", status)
 		}
 		host.until("bob's text", 10*time.Second, func() bool { return strings.Contains(host.sentTo(9000), "from bob") })
-		host.settings()
+		host.self()
 		host.until("bob to be listed", 10*time.Second, func() bool { return host.has("bob@example.com, until") })
 		host.want(bob.clientKey().String())
 	})
@@ -583,7 +657,7 @@ func TestApplication(t *testing.T) {
 	})
 
 	step("blocking a client from the list cuts it off", func(t *testing.T) {
-		host.settings()
+		host.self()
 		host.click("Block " + alice.clientKey().String())
 		host.until("the block", 5*time.Second, func() bool { return strings.HasPrefix(host.app.status, "Blocked ") })
 		if r, _ := clientRow(host.app.gate, alice.clientKey()); r.State != admission.Blocked {
@@ -606,7 +680,11 @@ func TestApplication(t *testing.T) {
 	})
 
 	step("the admin lifts the block and alice is back", func(t *testing.T) {
-		host.click("Approve " + alice.clientKey().String())
+		// The client lists reload in the background after the block, so wait for
+		// alice's row to reach the Blocked list before using its button.
+		approve := "Approve " + alice.clientKey().String()
+		host.until("alice in the blocked list", 10*time.Second, func() bool { _, ok := host.tt.Find(approve); return ok })
+		host.click(approve)
 		host.until("the approval", 5*time.Second, func() bool {
 			r, ok := clientRow(host.app.gate, alice.clientKey())
 			return ok && r.State == admission.Approved
@@ -620,16 +698,20 @@ func TestApplication(t *testing.T) {
 
 	step("removing a host disconnects its launchers and forgets it", func(t *testing.T) {
 		alice.click("SSH launcher")
+		alice.idle(time.Minute)
 		local := alice.app.connections[addr]["SSH"].(*connector.Tunnel).Port()
 		alice.click("Remove host")
-		alice.want("Remove lab?")
-		alice.click("No")
-		alice.wantNot("Remove lab?")
+		alice.dialog("Remove lab?").want("This removes the host and closes its connections.")
+		alice.dialog("Remove lab?").click("No")
+		if alice.dialogOpen("Remove lab?") {
+			t.Fatal("cancelling left the Remove window open")
+		}
 		if _, ok := alice.app.connections[addr]["SSH"]; !ok {
 			t.Fatal("cancelling the removal dropped the connection")
 		}
 		alice.click("Remove host")
-		alice.click("Yes")
+		alice.dialog("Remove lab?").click("Yes")
+		alice.idle(time.Minute)
 		if c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", local), 2*time.Second); err == nil {
 			c.Close()
 			t.Fatal("removing the host left its tunnel open")
@@ -637,11 +719,11 @@ func TestApplication(t *testing.T) {
 		if stored, _ := alice.app.store.Hosts(); len(stored) != 0 {
 			t.Fatalf("stored hosts = %+v", stored)
 		}
-		alice.want("Host removed", "Select a host from the sidebar")
+		alice.want("Host removed")
 	})
 
 	step("the host stops its server from Settings", func(t *testing.T) {
-		host.settings()
+		host.self()
 		host.scrollToTop()
 		host.toggleServer()
 		host.until("the server to stop", 30*time.Second, func() bool { return host.app.status == "Server stopped" })
@@ -664,7 +746,7 @@ func TestApplication(t *testing.T) {
 		if !again.app.serving["SSH"] {
 			t.Fatal("the SSH server did not come back on after a restart")
 		}
-		again.settings()
+		again.self()
 		again.toggleServer()
 		again.until("the server to start again", time.Minute, func() bool { return again.app.serverAddr != "" })
 		if again.app.serverAddr != addr {

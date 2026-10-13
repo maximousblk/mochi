@@ -43,7 +43,7 @@ starts the window in `app/`.
 | --- | --- |
 | `main.go` | Dispatch between the CLI subcommands and the app |
 | `cmd/` | CLI subcommands: `Issue` |
-| `app/` | The window: lifecycle, screens, tray, Send-text popup, approvals list, embedded icons and fonts |
+| `app/` | The window: lifecycle, screens, tray, Send-text window, approvals list, embedded icons and fonts |
 | `internal/state/` | SQLite state, identity seed, bootstrap trust list, state paths |
 | `internal/admission/` | Who may connect: gate, probation, certificates, dialing |
 | `internal/server/` | Relay region selection for the embedded Tailcat server |
@@ -60,3 +60,5 @@ starts the window in `app/`.
 
 - Use `nix develop --command ...` when a tool is not on your path.
 - Comments explain behavior that code cannot show. Don't describe history.
+- The UI thread owns app state. Anything that can block (a network dial, a store read or write, launching a program, opening a path) runs in a goroutine, and its result is applied with `a.update`, which also redraws every open window. An operation a button starts goes through `a.async` under a busy key, so the control shows it and stays disabled until it finishes.
+- Each dialog is its own window, opened through `openDialog` so one window exists per dialog target. Dialog state lives in that dialog, never in a shared app field.

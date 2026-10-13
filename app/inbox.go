@@ -27,32 +27,26 @@ func (a *app) canNotify() bool {
 	return a.notify != nil || mygo.NotificationsSupported()
 }
 
-// inboxLabel is the sidebar button's text, with the number of saved texts once
-// there are some.
-func (a *app) inboxLabel() string {
-	if len(a.inbox) == 0 {
-		return "✉  Inbox"
-	}
-	return fmt.Sprintf("✉  Inbox (%d)", len(a.inbox))
-}
-
-// openInbox shows the Inbox page, replacing whichever page was showing, and
-// loads the saved texts so the page is current when it opens.
-func (a *app) openInbox() {
-	a.showSettings = false
-	a.addingHost = false
-	a.showInbox = true
-	a.reloadInbox()
-}
-
-// reloadInbox reads the saved texts into a.inbox. It runs on the UI thread.
+// reloadInbox reads the saved texts off the UI thread and replaces a.inbox when
+// the read finishes. A request made during a read is not dropped: another read
+// follows, so a text that arrives meanwhile is shown. It runs on the UI thread.
 func (a *app) reloadInbox() {
-	texts, err := a.store.ReceivedTexts()
-	if err != nil {
-		a.status = fmt.Sprintf("Loading texts failed: %v", err)
+	if !a.inboxReload.start() {
 		return
 	}
-	a.inbox = texts
+	go func() {
+		texts, err := a.store.ReceivedTexts()
+		a.update(func() {
+			if err != nil {
+				a.status = fmt.Sprintf("Loading texts failed: %v", err)
+			} else {
+				a.inbox = texts
+			}
+			if a.inboxReload.done() {
+				a.reloadInbox()
+			}
+		})
+	}()
 }
 
 // receiveText is called by the receiver for each text, on the connection's
@@ -139,34 +133,41 @@ func notificationBody(t textsender.Text) string {
 	return body
 }
 
-// notificationClicked opens the Inbox and shows the window when a received-text
+// notificationClicked shows the self page, with its Inbox, when a received-text
 // notification is clicked. Other notifications are not the app's to handle.
 func (a *app) notificationClicked(id string) {
 	if !strings.HasPrefix(id, textNotificationPrefix) {
 		return
 	}
 	a.update(func() {
-		a.openInbox()
+		a.page = page{}
+		a.reloadInbox()
 		a.showWindow()
 	})
 }
 
-// deleteText removes one saved text and refreshes the page.
+// deleteText removes one saved text off the UI thread, then reloads the Inbox.
+// The delete is keyed by the text, so a second click on the same text does
+// nothing while the first is still running.
 func (a *app) deleteText(id int64) {
-	if err := a.store.DeleteReceivedText(id); err != nil {
-		a.status = fmt.Sprintf("Delete failed: %v", err)
-		return
-	}
-	a.reloadInbox()
+	a.async(fmt.Sprintf("text-delete|%d", id), func() error {
+		return a.store.DeleteReceivedText(id)
+	}, func(err error) {
+		if err != nil {
+			a.status = fmt.Sprintf("Delete failed: %v", err)
+			return
+		}
+		a.reloadInbox()
+	})
 }
 
-// inboxView is the Inbox page, newest text first.
+// inboxView is the Inbox section of the self page, newest text first.
 func (a *app) inboxView(c *ui.Context) {
 	theme := c.Theme()
-	ui.Text(c, "Inbox").FontSize(24).Bold()
+	ui.Text(c, "Inbox").FontSize(18).Bold()
 	if len(a.inbox) == 0 {
 		ui.Text(c, "No texts yet.").TextColor(theme.TextMuted)
-		ui.Text(c, "To receive texts here, turn on Send text in Settings. Other machines can send to this one from their Send text dialog, or from a terminal with: echo hello | tailcat <this machine's server address>").TextColor(theme.TextMuted)
+		ui.Text(c, "To receive texts here, turn on Send text on this page. Other machines can send to this one from their Send text window, or from a terminal with: echo hello | tailcat <this machine's server address>").TextColor(theme.TextMuted)
 		return
 	}
 	for _, t := range a.inbox {

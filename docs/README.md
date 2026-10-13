@@ -36,7 +36,7 @@ go run .
 Then:
 
 1. Click **+ Add host** and enter a name and a `tc...` Tailcat address.
-2. To share this machine, turn on **Enable Tailcat server** in Settings.
+2. To share this machine, turn on **Enable Tailcat server** on **This device**, the page the app opens on.
 
 ## Documentation
 
@@ -56,8 +56,10 @@ Then:
 ## Launcher settings
 
 Right-click any launcher tile and choose **Configure…** to edit that launcher's
-settings. On the Settings page it edits this machine's server; on a host's page
+settings. On the **This device** page it edits this machine's server; on a host's page
 it edits that host's client. Each launcher's doc lists its fields.
+
+Configure, Send text and Remove host open in their own windows. They can be moved, and the main window keeps working while they are open.
 
 ## License
 

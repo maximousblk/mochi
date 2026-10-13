@@ -30,7 +30,7 @@ func TestConnectTunnelsDirectIPAndLaunchesRustDesk(t *testing.T) {
 	host := state.Host{Name: "lab", Address: testharness.Address(server)}
 	c := New(connector.NewPorts(), nil, admission.Dialing{Key: key.NewNode()})
 
-	client, err := c.Connect(host, connector.Config{"port": fmt.Sprint(DirectPort)})
+	client, err := c.Connect(host, connector.Config{"port": fmt.Sprint(DirectPort)}, func(error) {})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestConnectRefusesHostWithDirectIPOff(t *testing.T) {
 	host := state.Host{Name: "lab", Address: testharness.Address(server)}
 	c := New(connector.NewPorts(), nil, admission.Dialing{Key: key.NewNode()})
 
-	client, err := c.Connect(host, connector.Config{"port": fmt.Sprint(DirectPort)})
+	client, err := c.Connect(host, connector.Config{"port": fmt.Sprint(DirectPort)}, func(error) {})
 	if err == nil || !strings.Contains(err.Error(), "does not accept RustDesk direct IP") {
 		t.Fatalf("connect error = %v; want the direct-IP refusal", err)
 	}
@@ -89,9 +89,9 @@ func TestConnectRefusesHostWithDirectIPOff(t *testing.T) {
 	}
 }
 
-// When RustDesk cannot be started, Connect disconnects the tunnel it opened and
-// returns the error.
-func TestConnectDisconnectsWhenRustDeskCannotStart(t *testing.T) {
+// When RustDesk cannot be started, Connect still returns the tunnel, and the
+// failure is reported through onError; the caller disconnects the client.
+func TestConnectReportsWhenRustDeskCannotStart(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the test installs a file without the execute bit, which Windows does not model")
 	}
@@ -113,11 +113,18 @@ func TestConnectDisconnectsWhenRustDeskCannotStart(t *testing.T) {
 	}
 	c := New(connector.NewPorts(), nil, admission.Dialing{Key: key.NewNode()})
 
-	client, err := c.Connect(host, connector.Config{"port": fmt.Sprint(DirectPort)})
-	if err == nil || !strings.Contains(err.Error(), "start RustDesk") {
-		t.Fatalf("connect error = %v; want the launch failure", err)
+	failed := make(chan error, 1)
+	client, err := c.Connect(host, connector.Config{"port": fmt.Sprint(DirectPort)}, func(err error) { failed <- err })
+	if err != nil {
+		t.Fatalf("connect: %v", err)
 	}
-	if client != nil {
-		t.Fatal("a failed launch returned a client")
+	t.Cleanup(func() { client.Disconnect() })
+	select {
+	case err := <-failed:
+		if !strings.Contains(err.Error(), "start RustDesk") {
+			t.Fatalf("launch error = %v; want the launch failure", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("a failed launch was not reported")
 	}
 }
