@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ashwin-y/mochi/internal/admission"
+	"github.com/maximousblk/mochi/internal/admission"
 )
 
 // tunnelDialTimeout bounds how long a tunnel waits for the host to accept a

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ashwin-y/mochi/internal/admission"
-	"github.com/ashwin-y/mochi/internal/state"
+	"github.com/maximousblk/mochi/internal/admission"
+	"github.com/maximousblk/mochi/internal/state"
 	"tailscale.com/types/key"
 )
 

@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ashwin-y/mochi/internal/admission"
-	"github.com/ashwin-y/mochi/internal/connector"
-	"github.com/ashwin-y/mochi/internal/sshserver"
-	"github.com/ashwin-y/mochi/internal/state"
-	"github.com/ashwin-y/mochi/internal/testharness"
+	"github.com/maximousblk/mochi/internal/admission"
+	"github.com/maximousblk/mochi/internal/connector"
+	"github.com/maximousblk/mochi/internal/sshserver"
+	"github.com/maximousblk/mochi/internal/state"
+	"github.com/maximousblk/mochi/internal/testharness"
 	gossh "golang.org/x/crypto/ssh"
 	"tailscale.com/types/key"
 )

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/ashwin-y/mochi/internal/admission"
+	"github.com/maximousblk/mochi/internal/admission"
 )
 
 // Field is one setting of a launcher.

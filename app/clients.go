@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ashwin-y/mochi/internal/admission"
 	"github.com/egoist/mygo/ui"
+	"github.com/maximousblk/mochi/internal/admission"
 )
 
 // clientStates are the admission states the self page lists, in display order.

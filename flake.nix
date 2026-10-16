@@ -20,7 +20,7 @@
       lib = nixpkgs.lib;
 
       version = "0.1.0";
-      vendorHash = "sha256-AqLHr35Ur890OwgLSl/YCa/PogmvGpQoRgaZZQNrXmM=";
+      vendorHash = "sha256-fGG+xxTt+4Rq5DUw+xiVWE7FRHFy0awfXWielcSKQiY=";
 
       targets = {
         x86_64-linux = { goos = "linux"; goarch = "amd64"; host = "x86_64-linux"; };
@@ -78,6 +78,15 @@
           doCheck = false;
           # Windows: a GUI executable, which opens no console window.
           ldflags = [ "-s" "-w" ] ++ lib.optional (t.goos == "windows") "-H=windowsgui";
+          # Leave out the tailscale.com features Tailcat doesn't use, as Tailcat's
+          # own releases do, and MyGo's inspector, as `mygo build` does for a
+          # production build. build-tags.txt is a copy of Tailcat's;
+          # build_tags_test.go fails when it differs from the pinned Tailcat's.
+          tags = lib.splitString "," (lib.removeSuffix "\n" (builtins.readFile ./build-tags.txt))
+            ++ [ "mygo_noinspector" ];
+          # Only the mochi command: the test helpers (internal/testharness) use
+          # tailscale.com test packages that the tags above leave out.
+          subPackages = [ "." ];
           # Go writes a cross-compiled binary to bin/<os>_<arch>/; move it up,
           # so every target has bin/mochi (bin/mochi.exe on Windows).
           postInstall = lib.optionalString (t.goos != "linux") ''

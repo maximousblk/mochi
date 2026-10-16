@@ -1,9 +1,9 @@
 package app
 
 import (
-	"github.com/ashwin-y/mochi/internal/state"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/maximousblk/mochi/internal/state"
 )
 
 // dialogWidth is how wide every dialog window is, in pixels.

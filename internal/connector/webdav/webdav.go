@@ -21,11 +21,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ashwin-y/mochi/internal/admission"
-	"github.com/ashwin-y/mochi/internal/connector"
-	"github.com/ashwin-y/mochi/internal/share"
-	"github.com/ashwin-y/mochi/internal/state"
 	"github.com/egoist/mygo/ui"
+	"github.com/maximousblk/mochi/internal/admission"
+	"github.com/maximousblk/mochi/internal/connector"
+	"github.com/maximousblk/mochi/internal/share"
+	"github.com/maximousblk/mochi/internal/state"
 	xwebdav "golang.org/x/net/webdav"
 )
 

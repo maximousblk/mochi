@@ -14,7 +14,7 @@ Build a Windows executable from a checkout:
 
 ```sh
 nix develop --command bash -lc \
-  'go run github.com/egoist/mygo/cmd/mygo build -platform windows/amd64'
+  'GOFLAGS="-tags=$(cat build-tags.txt)" go run github.com/egoist/mygo/cmd/mygo build -platform windows/amd64'
 ```
 
 The result is `dist/windows-amd64/Mochi.exe`. Windows amd64 is the platform

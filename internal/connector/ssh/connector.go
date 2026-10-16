@@ -9,11 +9,11 @@ import (
 	"log"
 	"sync"
 
-	"github.com/ashwin-y/mochi/internal/admission"
-	"github.com/ashwin-y/mochi/internal/connector"
-	"github.com/ashwin-y/mochi/internal/sshserver"
-	"github.com/ashwin-y/mochi/internal/state"
 	"github.com/egoist/mygo/ui"
+	"github.com/maximousblk/mochi/internal/admission"
+	"github.com/maximousblk/mochi/internal/connector"
+	"github.com/maximousblk/mochi/internal/sshserver"
+	"github.com/maximousblk/mochi/internal/state"
 )
 
 // ServePort is the default Tailcat port the SSH server listens on. It is not 22,

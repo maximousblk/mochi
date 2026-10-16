@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ashwin-y/mochi/internal/connector"
 	"github.com/egoist/mygo/ui"
+	"github.com/maximousblk/mochi/internal/connector"
 )
 
 // MaxBytes caps the text one send keeps. A longer send is cut to this many

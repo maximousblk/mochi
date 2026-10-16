@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ashwin-y/mochi/internal/admission"
-	"github.com/ashwin-y/mochi/internal/connector"
-	"github.com/ashwin-y/mochi/internal/connector/textsender"
-	"github.com/ashwin-y/mochi/internal/state"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/maximousblk/mochi/internal/admission"
+	"github.com/maximousblk/mochi/internal/connector"
+	"github.com/maximousblk/mochi/internal/connector/textsender"
+	"github.com/maximousblk/mochi/internal/state"
 	"github.com/tailscale/tailcat"
 	"tailscale.com/types/key"
 )

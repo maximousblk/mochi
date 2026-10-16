@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ashwin-y/mochi/internal/admission"
+	"github.com/maximousblk/mochi/internal/admission"
 	"github.com/tailscale/tailcat"
 )
 

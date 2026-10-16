@@ -5,7 +5,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/ashwin-y/mochi/internal/connector"
+	"github.com/maximousblk/mochi/internal/connector"
 )
 
 // probeTimeout bounds one probe of the local direct-IP port. It is a loopback

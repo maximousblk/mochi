@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ashwin-y/mochi/internal/connector"
-	"github.com/ashwin-y/mochi/internal/state"
+	"github.com/maximousblk/mochi/internal/connector"
+	"github.com/maximousblk/mochi/internal/state"
 )
 
 // fakeClient is a launcher's client that records when it is disconnected. When

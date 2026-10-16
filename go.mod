@@ -1,10 +1,10 @@
-module github.com/ashwin-y/mochi
+module github.com/maximousblk/mochi
 
 go 1.27.1
 
 require (
 	github.com/creack/pty v1.1.24
-	github.com/egoist/mygo v0.4.5
+	github.com/egoist/mygo v0.5.5
 	github.com/fxamacker/cbor/v2 v2.9.3
 	github.com/pkg/sftp v1.13.11
 	github.com/tailscale/gliderssh v0.3.4-0.20260716005906-1a0f895faf28
@@ -101,11 +101,11 @@ require (
 	golang.org/x/exp/typeparams v0.0.0-20260811152304-ee035b5b010f // indirect
 	golang.org/x/image v0.46.0 // indirect
 	golang.org/x/mod v0.41.0 // indirect
-	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/term v0.46.0 // indirect
-	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
-	golang.org/x/tools v0.50.0 // indirect
+	golang.org/x/tools v0.51.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard/windows v1.0.1 // indirect
 	gvisor.dev/gvisor v0.0.0-20260915211658-a6f909f08a72 // indirect

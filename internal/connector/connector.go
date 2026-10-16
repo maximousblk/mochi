@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ashwin-y/mochi/internal/state"
 	"github.com/egoist/mygo/ui"
+	"github.com/maximousblk/mochi/internal/state"
 	"github.com/tailscale/tailcat"
 )
 

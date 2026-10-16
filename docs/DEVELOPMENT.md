@@ -33,6 +33,10 @@ local DERP relay, so it needs loopback networking.
 - Static Windows build: see [Install](INSTALL.md#static-binaries).
 - Nix package: `nix build .#mochi`. Its `vendorHash` must change when
   `go.mod` or `go.sum` change; Nix prints the new value on mismatch.
+- Release builds use `build-tags.txt`, a copy of the pinned Tailcat's list of
+  tailscale.com features to leave out, plus `mygo_noinspector`. After a Tailcat
+  bump, copy its `build-tags.txt` again; `build_tags_test.go` fails until you
+  do. Plain `go build` without the tags works too, only larger.
 
 ## Code map
 

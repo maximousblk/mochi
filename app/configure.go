@@ -3,9 +3,9 @@ package app
 import (
 	"fmt"
 
-	"github.com/ashwin-y/mochi/internal/connector"
-	"github.com/ashwin-y/mochi/internal/state"
 	"github.com/egoist/mygo/ui"
+	"github.com/maximousblk/mochi/internal/connector"
+	"github.com/maximousblk/mochi/internal/state"
 )
 
 // configTarget is what a Configure window edits: the server side of a launcher

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/ashwin-y/mochi/internal/connector"
-	"github.com/ashwin-y/mochi/internal/state"
+	"github.com/maximousblk/mochi/internal/connector"
+	"github.com/maximousblk/mochi/internal/state"
 )
 
 // idleTimeout is how long a connection may go unused before it is closed.

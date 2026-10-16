@@ -10,11 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ashwin-y/mochi/internal/admission"
-	"github.com/ashwin-y/mochi/internal/connector"
-	"github.com/ashwin-y/mochi/internal/share"
-	"github.com/ashwin-y/mochi/internal/state"
-	"github.com/ashwin-y/mochi/internal/testharness"
+	"github.com/maximousblk/mochi/internal/admission"
+	"github.com/maximousblk/mochi/internal/connector"
+	"github.com/maximousblk/mochi/internal/share"
+	"github.com/maximousblk/mochi/internal/state"
+	"github.com/maximousblk/mochi/internal/testharness"
 	"github.com/tailscale/tailcat"
 	"tailscale.com/types/key"
 )

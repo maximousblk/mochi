@@ -3,8 +3,8 @@ package app
 import (
 	"testing"
 
-	"github.com/ashwin-y/mochi/internal/connector"
-	"github.com/ashwin-y/mochi/internal/state"
+	"github.com/maximousblk/mochi/internal/connector"
+	"github.com/maximousblk/mochi/internal/state"
 )
 
 // configure right-clicks the launcher tile labeled tile and chooses Configure…

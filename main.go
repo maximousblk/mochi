@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ashwin-y/mochi/app"
-	"github.com/ashwin-y/mochi/cmd"
-	"github.com/ashwin-y/mochi/internal/share"
+	"github.com/maximousblk/mochi/app"
+	"github.com/maximousblk/mochi/cmd"
+	"github.com/maximousblk/mochi/internal/share"
 )
 
 func main() {

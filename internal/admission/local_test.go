@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ashwin-y/mochi/internal/state"
-	"github.com/ashwin-y/mochi/internal/testharness"
+	"github.com/maximousblk/mochi/internal/state"
+	"github.com/maximousblk/mochi/internal/testharness"
 	"tailscale.com/types/key"
 )
 

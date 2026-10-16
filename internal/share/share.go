@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ashwin-y/mochi/internal/state"
+	"github.com/maximousblk/mochi/internal/state"
 )
 
 // Verbose logs every request, not only errors. Set by --verbose.

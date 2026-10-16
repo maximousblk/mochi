@@ -5,8 +5,8 @@ import (
 	"net"
 	"testing"
 
-	"github.com/ashwin-y/mochi/internal/admission"
-	"github.com/ashwin-y/mochi/internal/connector"
+	"github.com/maximousblk/mochi/internal/admission"
+	"github.com/maximousblk/mochi/internal/connector"
 )
 
 // The server side is on from Listen until Stop. It is healthy only while

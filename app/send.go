@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ashwin-y/mochi/internal/connector"
-	"github.com/ashwin-y/mochi/internal/connector/textsender"
-	"github.com/ashwin-y/mochi/internal/state"
 	"github.com/egoist/mygo/ui"
+	"github.com/maximousblk/mochi/internal/connector"
+	"github.com/maximousblk/mochi/internal/connector/textsender"
+	"github.com/maximousblk/mochi/internal/state"
 )
 
 // The Send text launcher is a one-shot action, so it has no enabled state: its

@@ -6,11 +6,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ashwin-y/mochi/internal/connector"
-	"github.com/ashwin-y/mochi/internal/connector/textsender"
-	"github.com/ashwin-y/mochi/internal/state"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/maximousblk/mochi/internal/connector"
+	"github.com/maximousblk/mochi/internal/connector/textsender"
+	"github.com/maximousblk/mochi/internal/state"
 )
 
 func (a *app) view(c *ui.Context) {

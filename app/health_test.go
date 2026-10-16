@@ -3,7 +3,7 @@ package app
 import (
 	"testing"
 
-	"github.com/ashwin-y/mochi/internal/connector"
+	"github.com/maximousblk/mochi/internal/connector"
 )
 
 // sickConnector reports whether it can serve, as the test sets it.
