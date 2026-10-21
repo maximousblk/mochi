@@ -1,11 +1,9 @@
 package app
 
 import (
-	"embed"
-	"fmt"
+	_ "embed"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/klauspost/compress/zstd"
 )
 
 // Icons and fonts are embedded here, because go:embed only reaches files at or
@@ -76,34 +74,20 @@ var folderIconData []byte
 
 var folderIcon = ui.MustParseSVG(folderIconData)
 
-// The Ioskeley Mono fonts are embedded zstd-compressed, which keeps every glyph,
-// weight and hint while taking a quarter of the room in the executable. They
-// decompress to the upstream files byte for byte, in tens of milliseconds at
-// startup, with a decoder Tailcat already links in. Recreate them from the
-// upstream release's Normal/Hinted TTFs with: zstd --ultra -22.
-//
-//go:embed resources/fonts/*.ttf.zst
-var fontFiles embed.FS
+//go:embed resources/fonts/IoskeleyMono-Regular.ttf
+var ioskeleyRegular []byte
 
-// fontNames are the weights of Ioskeley Mono that Mochi ships.
-var fontNames = []string{"Regular", "Medium", "SemiBold", "Bold"}
+//go:embed resources/fonts/IoskeleyMono-Medium.ttf
+var ioskeleyMedium []byte
+
+//go:embed resources/fonts/IoskeleyMono-SemiBold.ttf
+var ioskeleySemiBold []byte
+
+//go:embed resources/fonts/IoskeleyMono-Bold.ttf
+var ioskeleyBold []byte
 
 func registerFonts() error {
-	dec, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1))
-	if err != nil {
-		return err
-	}
-	defer dec.Close()
-	for _, name := range fontNames {
-		path := "resources/fonts/IoskeleyMono-" + name + ".ttf.zst"
-		packed, err := fontFiles.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		face, err := dec.DecodeAll(packed, nil)
-		if err != nil {
-			return fmt.Errorf("%s: %w", path, err)
-		}
+	for _, face := range [][]byte{ioskeleyRegular, ioskeleyMedium, ioskeleySemiBold, ioskeleyBold} {
 		if err := ui.RegisterFont(face, "Ioskeley Mono"); err != nil {
 			return err
 		}
