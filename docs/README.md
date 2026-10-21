@@ -64,4 +64,6 @@ Configure, Send text and Remove host open in their own windows. They can be move
 ## License
 
 Mochi is released under the MIT License; see [`LICENSE`](../LICENSE). Ioskeley
-Mono is under the SIL Open Font License 1.1 (`resources/fonts/OFL.txt`).
+Mono is under the SIL Open Font License 1.1
+([`app/resources/fonts/OFL.txt`](../app/resources/fonts/OFL.txt)); Mochi embeds
+its unmodified hinted TTFs, zstd-compressed.

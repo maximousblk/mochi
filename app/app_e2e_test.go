@@ -49,7 +49,7 @@ type node struct {
 	app    *app
 	tt     *ui.Tester
 	q      chan func()
-	opened []string // folders "Open containing folder" asked for
+	opened []string // folders "Open containing folder" asked for, under mu
 	theme  ui.Theme // the theme the last frame was drawn with
 	copied string   // the last text a launcher copied
 
@@ -77,9 +77,10 @@ func newNode(t *testing.T, name, dir string, relay *tailcfg.DERPRegion, trusted 
 	}
 	n := &node{t: t, name: name, dir: dir, q: make(chan func(), 4096), received: map[uint16][]byte{}}
 	a := &app{
-		relay:    relay,
-		runOnUI:  func(fn func()) { n.q <- fn },
-		openPath: func(p string) error { n.opened = append(n.opened, p); return nil },
+		relay:   relay,
+		runOnUI: func(fn func()) { n.q <- fn },
+		// The folder opens off the UI thread, so the record is locked.
+		openPath: func(p string) error { n.mu.Lock(); n.opened = append(n.opened, p); n.mu.Unlock(); return nil },
 		copyText: func(s string) { n.copied = s },
 
 		// Dialogs open as windows the test reads, instead of native ones.
@@ -452,8 +453,10 @@ func TestApplication(t *testing.T) {
 		// The database folder can be opened from Settings.
 		host.settings()
 		host.click("Open containing folder")
-		if len(host.opened) != 1 || host.opened[0] != host.dir {
-			t.Fatalf("opened %q, want the state folder %q", host.opened, host.dir)
+		opened := func() []string { host.mu.Lock(); defer host.mu.Unlock(); return append([]string(nil), host.opened...) }
+		host.until("the folder to open", 5*time.Second, func() bool { return len(opened()) > 0 })
+		if got := opened(); len(got) != 1 || got[0] != host.dir {
+			t.Fatalf("opened %q, want the state folder %q", got, host.dir)
 		}
 		host.self()
 	})

@@ -6,6 +6,7 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/egoist/mygo v0.6.0
 	github.com/fxamacker/cbor/v2 v2.9.3
+	github.com/klauspost/compress v1.20.0
 	github.com/pkg/sftp v1.13.11
 	github.com/tailscale/gliderssh v0.3.4-0.20260716005906-1a0f895faf28
 	github.com/tailscale/tailcat v0.7.1-0.20261007201807-52fbad323e9d
@@ -69,7 +70,6 @@ require (
 	github.com/jellydator/ttlcache/v3 v3.4.1 // indirect
 	github.com/jsimonetti/rtnetlink v1.4.2 // indirect
 	github.com/kamstrup/intmap v0.5.2 // indirect
-	github.com/klauspost/compress v1.20.0 // indirect
 	github.com/kortschak/wol v0.0.0-20200729010619-da482cc4850a // indirect
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
