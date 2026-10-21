@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -77,6 +78,12 @@ type app struct {
 	window   *mygo.Window
 	tray     *mygo.Tray
 	quitting bool
+	// controls are the window's minimize, maximize and close actions, when
+	// Mochi draws those buttons itself in its title bar (Windows and Linux).
+	// nil leaves them to the system, as macOS's traffic lights.
+	controls windowControls
+	// maximized tells the drawn maximize button to show restore instead.
+	maximized bool
 
 	// inbox is the saved texts, newest first, as the self page's Inbox shows them.
 	// inboxReload runs their reads the same way clientsReload does.
@@ -151,16 +158,28 @@ func Run(args []string) error {
 	}
 
 	mygo.App.WhenReady(func() {
+		// On Windows and Linux Mochi draws the window controls in its own
+		// title bar, beside the Settings gear and in the same style. macOS
+		// keeps its traffic lights, which users expect on the left.
+		ownButtons := runtime.GOOS != "darwin"
 		a.window = mygo.NewWindow(mygo.WindowOptions{
-			Title:          "Mochi",
-			Width:          720,
-			Height:         560,
-			StateKey:       "main",
-			Hidden:         true,
-			TitleBarStyle:  mygo.TitleBarHidden,
-			TitleBarHeight: 44,
-			Content:        ui.View(a.view),
+			Title:             "Mochi",
+			Width:             720,
+			Height:            560,
+			StateKey:          "main",
+			Hidden:            true,
+			TitleBarStyle:     mygo.TitleBarHidden,
+			TitleBarHeight:    44,
+			HideWindowButtons: ownButtons,
+			Content:           ui.View(a.view),
 		})
+		if ownButtons {
+			a.controls = a.window
+			// The saved window state may reopen it maximized.
+			a.maximized = a.window.IsMaximized()
+			a.window.OnMaximize(func() { a.maximized = true; a.window.Invalidate() })
+			a.window.OnUnmaximize(func() { a.maximized = false; a.window.Invalidate() })
+		}
 		a.window.OnClose(func(e *mygo.CloseEvent) {
 			if !a.quitting {
 				e.PreventDefault()
@@ -169,6 +188,9 @@ func Run(args []string) error {
 			}
 		})
 		a.tray, _ = mygo.NewTray(mygo.TrayOptions{
+			// The ID keeps the icon where the user put it in the macOS menu bar
+			// and whether Windows shows it on the taskbar.
+			ID:      "mochi",
 			Icon:    trayIcon,
 			ToolTip: "Mochi",
 			Menu: mygo.NewMenu([]*mygo.MenuItem{

@@ -42,6 +42,28 @@ var settingsIconData []byte
 
 var settingsIcon = ui.MustParseSVG(settingsIconData)
 
+// The window controls that Mochi draws itself on Windows and Linux.
+
+//go:embed resources/minimize.svg
+var minimizeIconData []byte
+
+var minimizeIcon = ui.MustParseSVG(minimizeIconData)
+
+//go:embed resources/maximize.svg
+var maximizeIconData []byte
+
+var maximizeIcon = ui.MustParseSVG(maximizeIconData)
+
+//go:embed resources/restore.svg
+var restoreIconData []byte
+
+var restoreIcon = ui.MustParseSVG(restoreIconData)
+
+//go:embed resources/close.svg
+var closeIconData []byte
+
+var closeIcon = ui.MustParseSVG(closeIconData)
+
 //go:embed resources/clipboard.svg
 var clipboardIconData []byte
 

@@ -385,6 +385,36 @@ func TestUILayout(t *testing.T) {
 	e.want("Mochi", "lab")
 }
 
+// fakeControls records the window actions the drawn title bar buttons call.
+type fakeControls struct{ calls []string }
+
+func (f *fakeControls) Minimize()   { f.calls = append(f.calls, "minimize") }
+func (f *fakeControls) Maximize()   { f.calls = append(f.calls, "maximize") }
+func (f *fakeControls) Unmaximize() { f.calls = append(f.calls, "unmaximize") }
+func (f *fakeControls) Close()      { f.calls = append(f.calls, "close") }
+
+// Where Mochi draws the window controls, the maximize button turns into
+// restore while the window is maximized, and each button acts on the window.
+// Where the system draws them, Mochi draws none.
+func TestUIWindowButtons(t *testing.T) {
+	e := newUI(t, false, nil)
+	e.wantNot("Minimize", "Maximize", "Close")
+
+	f := &fakeControls{}
+	e.app.controls = f
+	e.tt.Frame()
+	e.click("Minimize")
+	e.click("Maximize")
+	e.app.maximized = true
+	e.tt.Frame()
+	e.wantNot("Maximize")
+	e.click("Restore")
+	e.click("Close")
+	if got := strings.Join(f.calls, ","); got != "minimize,maximize,unmaximize,close" {
+		t.Fatalf("calls = %s", got)
+	}
+}
+
 func TestUIAddHost(t *testing.T) {
 	e := newUI(t, false, nil)
 	addr := testAddress(t)

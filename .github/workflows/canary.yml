@@ -1,0 +1,93 @@
+# Builds Mochi on every push to main and replaces the "canary" pre-release
+# with the result: the macOS disk image, the Windows installer and executable,
+# and the Linux executable. Builds go through `mygo build`, the MyGo CLI pinned
+# in go.mod as a tool, with Tailcat's build tags (build-tags.txt).
+name: Canary
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One canary at a time; a newer push waits for the running one instead of
+# cancelling it halfway through replacing the release.
+concurrency:
+  group: canary
+  cancel-in-progress: false
+
+jobs:
+  linux-windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Install NSIS
+        run: sudo apt-get update && sudo apt-get install -y nsis
+      - name: Build
+        run: |
+          version="$(jq -r .version mygo.json)-canary.${GITHUB_SHA::7}"
+          GOFLAGS="-tags=$(cat build-tags.txt)" go tool mygo build \
+            -platform linux/amd64,linux/arm64,windows/amd64,windows/arm64 -o dist
+          mkdir release
+          for arch in amd64 arm64; do
+            cp "dist/linux-$arch/mochi" "release/mochi-linux-$arch"
+            cp "dist/windows-$arch/Mochi.exe" "release/Mochi-windows-$arch.exe"
+            # Mochi's one-step installer, in place of MyGo's wizard.
+            makensis -V2 \
+              -DAPP_VERSION="$version" \
+              -DAPP_EXE="$PWD/dist/windows-$arch/Mochi.exe" \
+              -DOUT_FILE="$PWD/release/Mochi-Setup-windows-$arch.exe" \
+              packaging/windows/installer.nsi
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-windows
+          path: release/
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: |
+          GOFLAGS="-tags=$(cat build-tags.txt)" go tool mygo build -platform darwin/universal -o dist
+          mkdir release
+          cp dist/darwin-universal/*.dmg release/Mochi-macos-universal.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: release/
+
+  publish:
+    needs: [linux-windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - name: Replace the canary release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cd release
+          sha256sum -- * > SHA256SUMS
+          gh release delete canary --cleanup-tag --yes || true
+          gh release create canary ./* \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "Canary" \
+            --notes "Built from ${GITHUB_SHA::7} on main. Replaced on every push; not a stable release.
+
+          The apps are unsigned. On macOS, open Mochi with right-click > Open the first time, or run \`xattr -dr com.apple.quarantine /Applications/Mochi.app\`. On Windows, SmartScreen may ask to confirm."

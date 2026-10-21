@@ -1,7 +1,7 @@
 #!/bin/sh
-# Builds Mochi's Windows executable with MyGo, then the one-step installer
-# with NSIS. Run it from the repository root, in the development shell, which
-# provides makensis (flake.nix).
+# Builds Mochi's Windows executable with MyGo (the CLI pinned in go.mod), then
+# the one-step installer with NSIS. Run it from the repository root, in the
+# development shell, which provides makensis (flake.nix).
 #
 #   packaging/windows/build.sh [amd64|arm64]
 set -eu
@@ -16,7 +16,7 @@ if [ -z "$version" ]; then
   exit 1
 fi
 
-go run github.com/egoist/mygo/cmd/mygo build -platform "windows/$arch" -skip-dmg
+GOFLAGS="-tags=$(cat build-tags.txt)" go tool mygo build -platform "windows/$arch"
 
 out="dist/windows-$arch"
 exe="$out/Mochi.exe"

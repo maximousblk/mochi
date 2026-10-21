@@ -4,7 +4,7 @@ go 1.27.1
 
 require (
 	github.com/creack/pty v1.1.24
-	github.com/egoist/mygo v0.5.5
+	github.com/egoist/mygo v0.6.0
 	github.com/fxamacker/cbor/v2 v2.9.3
 	github.com/pkg/sftp v1.13.11
 	github.com/tailscale/gliderssh v0.3.4-0.20260716005906-1a0f895faf28
@@ -114,3 +114,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+tool github.com/egoist/mygo/cmd/mygo

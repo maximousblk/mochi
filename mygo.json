@@ -7,5 +7,8 @@
   "icon": "app/resources/icon.png",
   "macos": {
     "infoPlist": { "LSUIElement": true }
+  },
+  "linux": {
+    "webview": false
   }
 }

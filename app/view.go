@@ -20,8 +20,9 @@ func (a *app) view(c *ui.Context) {
 	bar := c.TitleBar()
 	ui.Column(c).Fill().AlignItems(ui.Stretch).Children(func() {
 		// The title bar holds the way back to this device's page on the left and
-		// the Settings gear on the right. The right padding clears the native
-		// window controls, so the gear sits just left of them.
+		// the Settings gear on the right. Where the system draws the window
+		// controls (macOS), the padding clears them; elsewhere Mochi draws them
+		// after the gear, in the same style.
 		ui.Row(c).Height(max(bar.Height, 44)).Padding(0, bar.Right+12, 0, bar.Left+16).Background(theme.Background).AlignItems(ui.Center).DragWindow().Children(func() {
 			if flatButton(c, "This device", func() {
 				ui.Text(c, "Mochi").FontSize(16).Bold()
@@ -32,6 +33,7 @@ func (a *app) view(c *ui.Context) {
 			if iconButton(c, settingsIcon, "Settings").Clicked() {
 				a.goTo(page{kind: pageSettings})
 			}
+			a.windowButtons(c)
 		})
 		ui.Row(c).Height(1).Background(theme.Border)
 		ui.Row(c).Grow(1).AlignItems(ui.Stretch).Children(func() {
@@ -313,6 +315,42 @@ func (a *app) copyButton(c *ui.Context, value, label string) {
 	if iconButton(c, clipboardIcon, "Copy "+label).Clicked() {
 		c.WriteClipboard(value)
 		a.say(a.page, "Copied "+label)
+	}
+}
+
+// windowControls are the window actions the drawn title bar buttons call.
+// *mygo.Window has them.
+type windowControls interface {
+	Minimize()
+	Maximize()
+	Unmaximize()
+	Close()
+}
+
+// windowButtons draws minimize, maximize (or restore) and close after the
+// Settings gear, when Mochi draws them itself. Close goes through the window's
+// OnClose, which hides it to the tray.
+func (a *app) windowButtons(c *ui.Context) {
+	if a.controls == nil {
+		return
+	}
+	if iconButton(c, minimizeIcon, "Minimize").Clicked() {
+		a.controls.Minimize()
+	}
+	icon, label := maximizeIcon, "Maximize"
+	if a.maximized {
+		icon, label = restoreIcon, "Restore"
+	}
+	// MaximizeButton gives it Windows 11's snap layouts on hover.
+	if max := iconButton(c, icon, label).MaximizeButton(); max.Clicked() {
+		if a.maximized {
+			a.controls.Unmaximize()
+		} else {
+			a.controls.Maximize()
+		}
+	}
+	if iconButton(c, closeIcon, "Close").Clicked() {
+		a.controls.Close()
 	}
 }
 

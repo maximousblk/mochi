@@ -30,13 +30,17 @@ local DERP relay, so it needs loopback networking.
 
 ## Builds
 
-- Static Windows build: see [Install](INSTALL.md#static-binaries).
+- Every build goes through `go tool mygo build` (MyGo's CLI, pinned in
+  `go.mod` as a tool): the flake, the canary workflow and
+  [static binaries](INSTALL.md#static-binaries). It adds what a plain
+  `go build` lacks: the production flag, the app's identity, and on Windows
+  the icon and manifest.
 - Nix package: `nix build .#mochi`. Its `vendorHash` must change when
   `go.mod` or `go.sum` change; Nix prints the new value on mismatch.
 - Release builds use `build-tags.txt`, a copy of the pinned Tailcat's list of
-  tailscale.com features to leave out, plus `mygo_noinspector`. After a Tailcat
-  bump, copy its `build-tags.txt` again; `build_tags_test.go` fails until you
-  do. Plain `go build` without the tags works too, only larger.
+  tailscale.com features to leave out, passed through `GOFLAGS`. After a
+  Tailcat bump, copy its `build-tags.txt` again; `build_tags_test.go` fails
+  until you do. Building without the tags works too, only larger.
 
 ## Code map
 

@@ -4,14 +4,16 @@
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
   # packages.<system>.Mochi is the app of that platform, and
-  # packages.<system>.MochiInstaller its installer:
+  # packages.<system>.MochiInstaller its installer. Both come from `mygo build`
+  # (the MyGo CLI pinned in go.mod as a tool), as releases do:
   #
   #   linux    Mochi: the executable, wrapped with its runtime libraries.
-  #            MochiInstaller: a tarball with the executable, desktop entry and icon.
-  #   darwin   Mochi: Mochi.app, with the icon. MochiInstaller: none. A disk image
-  #            needs macOS's hdiutil, so the build fails here with that reason.
-  #   windows  Mochi: mochi.exe. MochiInstaller: the NSIS installer of
-  #            packaging/windows/installer.nsi.
+  #            MochiInstaller: MyGo's tarball with install.sh, which installs
+  #            for the user in ~/.local.
+  #   darwin   Mochi: Mochi.app. MochiInstaller: none. A disk image needs
+  #            macOS's hdiutil, so the build fails here with that reason.
+  #   windows  Mochi: mochi.exe. MochiInstaller: the one-step NSIS installer
+  #            of packaging/windows/installer.nsi.
   #
   # Every target is built from the host named in `host`: Go cross-compiles
   # without cgo, and NSIS runs on Linux.
@@ -19,8 +21,8 @@
     let
       lib = nixpkgs.lib;
 
-      version = "0.1.0";
-      vendorHash = "sha256-fGG+xxTt+4Rq5DUw+xiVWE7FRHFy0awfXWielcSKQiY=";
+      version = (builtins.fromJSON (builtins.readFile ./mygo.json)).version;
+      vendorHash = "sha256-4DC5NbaCIo0TCvTrOz06rfS8GiWXaZyydhaoK1YmUxk=";
 
       targets = {
         x86_64-linux = { goos = "linux"; goarch = "amd64"; host = "x86_64-linux"; };
@@ -59,114 +61,80 @@
         libxcb
       ];
 
-      # The Go program of a target. No cgo anywhere: MyGo loads the desktop
-      # libraries at run time with purego, so they are needed by the wrapper.
-      goProgram = t:
+      # `mygo build` of one target: what it writes for <goos>-<goarch>. It adds
+      # what a plain go build lacks: the production flag, the app's identity
+      # and, on Windows, its icon and manifest. No cgo anywhere: MyGo loads
+      # the desktop libraries at run time with purego.
+      mygoBuild = t:
         let pkgs = nixpkgs.legacyPackages.${t.host};
         in (pkgs.buildGoModule.override { go = pkgs.go_1_27; }) {
-          pname = "mochi";
+          pname = "mochi-${t.goos}-${t.goarch}";
           inherit version vendorHash;
           src = self;
           env.CGO_ENABLED = "0";
-          # The Go setup hook sets GOOS and GOARCH to the host's, so the target's
-          # are exported only once it has run, before the build.
-          preBuild = ''
-            export GOOS=${t.goos} GOARCH=${t.goarch}
-          '';
-          nativeBuildInputs = lib.optionals (t.goos == "linux") [ pkgs.makeWrapper ];
+          # mygo build also makes MyGo's own Windows installer, with makensis.
+          nativeBuildInputs = lib.optionals (t.goos == "windows") [ pkgs.nsis ];
           # The tests run local relays and take minutes; run them with go test.
           doCheck = false;
-          # Windows: a GUI executable, which opens no console window.
-          ldflags = [ "-s" "-w" ] ++ lib.optional (t.goos == "windows") "-H=windowsgui";
-          # Leave out the tailscale.com features Tailcat doesn't use, as Tailcat's
-          # own releases do, and MyGo's inspector, as `mygo build` does for a
-          # production build. build-tags.txt is a copy of Tailcat's;
-          # build_tags_test.go fails when it differs from the pinned Tailcat's.
-          tags = lib.splitString "," (lib.removeSuffix "\n" (builtins.readFile ./build-tags.txt))
-            ++ [ "mygo_noinspector" ];
-          # Only the mochi command: the test helpers (internal/testharness) use
-          # tailscale.com test packages that the tags above leave out.
-          subPackages = [ "." ];
-          # Go writes a cross-compiled binary to bin/<os>_<arch>/; move it up,
-          # so every target has bin/mochi (bin/mochi.exe on Windows).
-          postInstall = lib.optionalString (t.goos != "linux") ''
-            mv $out/bin/${t.goos}_${t.goarch}/* $out/bin/
-            rmdir $out/bin/${t.goos}_${t.goarch}
-          '' + lib.optionalString (t.goos == "linux") ''
-            wrapProgram $out/bin/mochi \
-              --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath (linuxGraphics pkgs)}
+          # build-tags.txt leaves out the tailscale.com features Tailcat doesn't
+          # use, as Tailcat's own releases do; mygo build passes the tags of
+          # GOFLAGS on and adds its own. build_tags_test.go keeps the file in
+          # step with the pinned Tailcat.
+          buildPhase = ''
+            runHook preBuild
+            export HOME=$TMPDIR
+            export GOFLAGS="$GOFLAGS -tags=$(cat build-tags.txt)"
+            go tool mygo build -platform ${t.goos}/${t.goarch} -skip-dmg -o "$TMPDIR/mygo-out"
+            runHook postBuild
           '';
-          meta = {
-            description = "Native desktop app for Tailcat hosts";
-            homepage = "https://github.com/maximousblk/mochi";
-            license = lib.licenses.mit;
-            mainProgram = "mochi";
-          };
+          installPhase = ''
+            runHook preInstall
+            cp -r "$TMPDIR/mygo-out/${t.goos}-${t.goarch}" $out
+            runHook postInstall
+          '';
         };
+
+      meta = {
+        description = "Native desktop app for Tailcat hosts";
+        homepage = "https://github.com/maximousblk/mochi";
+        license = lib.licenses.mit;
+        mainProgram = "mochi";
+      };
 
       exeName = t: if t.goos == "windows" then "mochi.exe" else "mochi";
 
-      # Mochi.app: the executable, Info.plist and the icon as .icns.
-      darwinApp = t:
+      # Linux: the executable, wrapped with the desktop libraries it loads.
+      linuxProgram = t:
         let pkgs = nixpkgs.legacyPackages.${t.host};
-        in pkgs.runCommand "Mochi.app" {
-          nativeBuildInputs = [ pkgs.libicns ];
+        in pkgs.runCommand "mochi-${version}" {
+          nativeBuildInputs = [ pkgs.makeWrapper ];
+          inherit meta;
         } ''
-          app=$out/Contents
-          mkdir -p $app/MacOS $app/Resources
-          cp ${goProgram t}/bin/mochi $app/MacOS/Mochi
-          chmod 755 $app/MacOS/Mochi
-          png2icns $app/Resources/AppIcon.icns ${self}/app/resources/icon.png
-          cat > $app/Info.plist <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>CFBundleName</key><string>Mochi</string>
-            <key>CFBundleDisplayName</key><string>Mochi</string>
-            <key>CFBundleExecutable</key><string>Mochi</string>
-            <key>CFBundleIdentifier</key><string>dev.mochi.tailcat</string>
-            <key>CFBundleIconFile</key><string>AppIcon</string>
-            <key>LSUIElement</key><true/>
-            <key>CFBundlePackageType</key><string>APPL</string>
-            <key>CFBundleShortVersionString</key><string>${version}</string>
-            <key>CFBundleVersion</key><string>${version}</string>
-            <key>LSMinimumSystemVersion</key><string>13.0</string>
-            <key>NSHighResolutionCapable</key><true/>
-          </dict>
-          </plist>
-          EOF
+          mkdir -p $out/bin
+          makeWrapper ${mygoBuild t}/mochi $out/bin/mochi \
+            --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath (linuxGraphics pkgs)}
         '';
 
-      # Linux: the archive of the executable with its desktop entry and icon.
+      # Linux: MyGo's tarball of the executable, desktop entry, icon and install.sh.
       linuxArchive = t:
         let pkgs = nixpkgs.legacyPackages.${t.host};
-        in pkgs.runCommand "mochi-${version}-linux-${t.goarch}.tar.gz" {
-          nativeBuildInputs = [ pkgs.gnutar pkgs.gzip ];
-        } ''
-          dir=$(mktemp -d)/mochi-${version}
-          mkdir -p $dir
-          cp ${goProgram t}/bin/mochi $dir/mochi
-          cp ${self}/app/resources/icon.png $dir/mochi.png
-          cat > $dir/mochi.desktop <<EOF
-          [Desktop Entry]
-          Type=Application
-          Name=Mochi
-          Exec=mochi
-          Icon=mochi
-          Terminal=false
-          Categories=Network;
-          EOF
-          tar -C $(dirname $dir) -czf $out mochi-${version}
+        in pkgs.runCommand "mochi-${version}-linux-${t.goarch}.tar.gz" { } ''
+          cp ${mygoBuild t}/mochi-${version}-linux-${t.goarch}.tar.gz $out
         '';
 
-      # Windows: mochi.exe, named as Windows needs it. The Go build names the
-      # file after the package, without the extension.
+      # Mochi.app, as mygo build bundles it: Info.plist, icon and executable.
+      darwinApp = t:
+        let pkgs = nixpkgs.legacyPackages.${t.host};
+        in pkgs.runCommand "Mochi.app" { inherit meta; } ''
+          cp -r ${mygoBuild t}/Mochi.app $out
+        '';
+
+      # Windows: mochi.exe.
       windowsExe = t:
         let pkgs = nixpkgs.legacyPackages.${t.host};
-        in pkgs.runCommand "mochi-${version}" { } ''
+        in pkgs.runCommand "mochi-${version}" { inherit meta; } ''
           mkdir -p $out/bin
-          cp ${goProgram t}/bin/mochi.exe $out/bin/mochi.exe
+          cp ${mygoBuild t}/Mochi.exe $out/bin/mochi.exe
         '';
 
       # Windows: the NSIS installer, which installs for the current user.
@@ -187,7 +155,7 @@
         let pkgs = nixpkgs.legacyPackages.${t.host};
         in pkgs.runCommand "Mochi-${version}-${t.goarch}.dmg" { } ''
           echo "Mochi's macOS disk image needs hdiutil, which only macOS has." >&2
-          echo "Build it on a Mac with packaging/macos/ (see docs/INSTALL.md)." >&2
+          echo "Build it on a Mac: go tool mygo build -platform darwin/universal (see docs/INSTALL.md)." >&2
           exit 1
         '';
 
@@ -195,7 +163,7 @@
         let t = targets.${system};
         in if t.goos == "darwin" then darwinApp t
         else if t.goos == "windows" then windowsExe t
-        else goProgram t;
+        else linuxProgram t;
 
       installer = system:
         let t = targets.${system};
