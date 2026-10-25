@@ -52,7 +52,7 @@ starts the window in `app/`.
 | `main.go` | Dispatch between the CLI subcommands and the app |
 | `cmd/` | CLI subcommands: `Issue` |
 | `app/` | The window: lifecycle, screens, tray, Send-text window, approvals list, embedded icons and fonts |
-| `internal/state/` | SQLite state, identity seed, bootstrap trust list, state paths |
+| `internal/state/` | PocketBase collections and records, identity seed, bootstrap trust list, data paths |
 | `internal/admission/` | Who may connect: gate, probation, certificates, dialing |
 | `internal/server/` | Relay region selection for the embedded Tailcat server |
 | `internal/sshserver/` | The in-process SSH server: sessions, PTY, sftp subsystem |

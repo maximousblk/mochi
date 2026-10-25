@@ -65,11 +65,11 @@ func StartProcess(exe string, args ...string) error {
 
 // OpenLog opens webdav.log beside the state database, creating it if needed.
 func OpenLog() (*os.File, error) {
-	p, err := state.Path()
+	dir, err := state.Dir()
 	if err != nil {
 		return nil, err
 	}
-	return os.OpenFile(filepath.Join(filepath.Dir(p), logName), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	return os.OpenFile(filepath.Join(dir, logName), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 }
 
 // statusRecorder keeps the status code a handler wrote, for the request log.

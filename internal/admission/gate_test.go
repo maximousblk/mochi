@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"database/sql"
 	"io"
 	"net"
 	"path/filepath"
@@ -39,14 +38,14 @@ func issue(t *testing.T, ca ed25519.PrivateKey, k key.NodePublic, ttl time.Durat
 	return c
 }
 
-func openDB(t *testing.T) *sql.DB {
+func openDB(t *testing.T) *state.Store {
 	t.Helper()
-	db, err := state.OpenDB(filepath.Join(t.TempDir(), "mochi.db"))
+	store, err := state.Open(filepath.Join(t.TempDir(), "data"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
-	return db
+	t.Cleanup(func() { _ = store.Close() })
+	return store
 }
 
 func TestVerify(t *testing.T) {
@@ -120,7 +119,7 @@ func newEnv(t *testing.T, tweak func(*Gate), trusted ...ed25519.PublicKey) *env 
 	t.Helper()
 	relay := testharness.Relay(t)
 	id := state.NewIdentity()
-	g, err := NewGate(openDB(t), id.Private(), trusted)
+	g, err := NewGate(openDB(t).App(), id.Private(), trusted)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -515,9 +514,9 @@ func TestProbationCap(t *testing.T) {
 
 // The remaining tests need no network: they exercise the table.
 
-func offlineGate(t *testing.T, db *sql.DB, self state.Identity, trusted ...ed25519.PublicKey) *Gate {
+func offlineGate(t *testing.T, db *state.Store, self state.Identity, trusted ...ed25519.PublicKey) *Gate {
 	t.Helper()
-	g, err := NewGate(db, self.Private(), trusted)
+	g, err := NewGate(db.App(), self.Private(), trusted)
 	if err != nil {
 		t.Fatal(err)
 	}

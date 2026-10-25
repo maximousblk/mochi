@@ -1,66 +1,69 @@
 package state
 
-import "time"
+import (
+	"time"
 
-// maxReceivedTexts is how many received texts are kept. The oldest are dropped
-// as new ones arrive, so the inbox cannot grow without bound.
+	"github.com/pocketbase/pocketbase/core"
+)
+
 const maxReceivedTexts = 100
 
-// ReceivedText is a text that arrived on the Send text port.
 type ReceivedText struct {
-	ID     int64
+	ID     string
 	Sender string
 	Body   string
 	At     time.Time
 }
 
-// AddReceivedText saves a received text and drops all but the newest
-// maxReceivedTexts. It returns the new text's ID.
-func (s *StateStore) AddReceivedText(sender, body string, at time.Time) (int64, error) {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
-	res, err := tx.Exec(`INSERT INTO received_texts(sender, body, received_at) VALUES (?, ?, ?)`,
-		sender, body, at.UnixNano())
-	if err != nil {
-		return 0, err
-	}
-	id, err := res.LastInsertId()
-	if err != nil {
-		return 0, err
-	}
-	if _, err := tx.Exec(`DELETE FROM received_texts WHERE id NOT IN
-        (SELECT id FROM received_texts ORDER BY id DESC LIMIT ?)`, maxReceivedTexts); err != nil {
-		return 0, err
-	}
-	return id, tx.Commit()
+// AddReceivedText stores a text and prunes older records atomically.
+func (s *Store) AddReceivedText(sender, body string, at time.Time) (string, error) {
+	var id string
+	err := s.app.RunInTransaction(func(tx core.App) error {
+		r := core.NewRecord(mustCollection(tx, "received_texts"))
+		r.Set("sender", sender)
+		r.Set("body", body)
+		r.Set("received", at)
+		if err := tx.Save(r); err != nil {
+			return err
+		}
+		id = r.Id
+		old, err := tx.FindRecordsByFilter("received_texts", "", "-received", 0, 0)
+		if err != nil {
+			return err
+		}
+		if len(old) > maxReceivedTexts {
+			for _, item := range old[maxReceivedTexts:] {
+				if err := tx.Delete(item); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+	return id, err
 }
 
-// ReceivedTexts returns the saved texts, newest first.
-func (s *StateStore) ReceivedTexts() ([]ReceivedText, error) {
-	rows, err := s.db.Query(`SELECT id, sender, body, received_at FROM received_texts ORDER BY id DESC`)
+// ReceivedTexts returns saved texts newest first.
+func (s *Store) ReceivedTexts() ([]ReceivedText, error) {
+	recs, err := s.app.FindRecordsByFilter("received_texts", "", "-received", maxReceivedTexts, 0)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var texts []ReceivedText
-	for rows.Next() {
-		var t ReceivedText
-		var at int64
-		if err := rows.Scan(&t.ID, &t.Sender, &t.Body, &at); err != nil {
-			return nil, err
-		}
-		t.At = time.Unix(0, at)
-		texts = append(texts, t)
+	out := make([]ReceivedText, 0, len(recs))
+	for _, r := range recs {
+		out = append(out, ReceivedText{ID: r.Id, Sender: r.GetString("sender"), Body: r.GetString("body"), At: r.GetDateTime("received").Time()})
 	}
-	return texts, rows.Err()
+	return out, nil
 }
 
-// DeleteReceivedText removes one saved text. Deleting an ID that is gone is not
-// an error.
-func (s *StateStore) DeleteReceivedText(id int64) error {
-	_, err := s.db.Exec(`DELETE FROM received_texts WHERE id = ?`, id)
-	return err
+// DeleteReceivedText removes a saved text; an already-pruned ID is harmless.
+func (s *Store) DeleteReceivedText(id string) error {
+	r, err := s.app.FindRecordById("received_texts", id)
+	if recordMissing(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return s.app.Delete(r)
 }

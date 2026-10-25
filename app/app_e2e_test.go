@@ -71,7 +71,7 @@ func newNode(t *testing.T, name, dir string, relay *tailcfg.DERPRegion, trusted 
 	if dir == "" {
 		dir = t.TempDir()
 	}
-	store, err := state.OpenState(filepath.Join(dir, "mochi.db"), "")
+	store, err := state.Open(filepath.Join(dir, "data"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func (n *node) startServer() string {
 	if addr == "" || addr != n.app.serverAddr {
 		n.t.Fatalf("%s: copied server address %q, server is at %q", n.name, addr, n.app.serverAddr)
 	}
-	if on, _ := n.app.store.BoolSetting("server_enabled"); !on {
+	if on, _ := n.app.store.ServerEnabled(); !on {
 		n.t.Fatalf("%s: the server was started but the setting was not saved", n.name)
 	}
 	return addr
@@ -734,7 +734,7 @@ func TestApplication(t *testing.T) {
 			t.Fatal("the server stopped but still has an address")
 		}
 		host.wantNot("Server address:", "Pending approval", "Approved")
-		if on, _ := host.app.store.BoolSetting("server_enabled"); on {
+		if on, _ := host.app.store.ServerEnabled(); on {
 			t.Fatal("the server is stopped but the setting still says on")
 		}
 	})
@@ -756,7 +756,9 @@ func TestApplication(t *testing.T) {
 			t.Fatalf("the address changed across a restart:\n  before %s\n  after  %s", addr, again.app.serverAddr)
 		}
 		// Bob was approved before the restart and sends without presenting anything new.
-		bob.app.store.DB().Exec(`DELETE FROM certs`)
+		if err := bob.app.store.DeleteCerts(); err != nil {
+			t.Fatal(err)
+		}
 		bob.click("lab")
 		status := bob.sendText("9000", "after restart", time.Minute)
 		if !strings.HasPrefix(status, "Sent ") {

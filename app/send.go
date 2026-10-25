@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/maximousblk/mochi/internal/connector"
 	"github.com/maximousblk/mochi/internal/connector/textsender"
 	"github.com/maximousblk/mochi/internal/state"
 )
@@ -37,7 +36,7 @@ func (a *app) openSend(host state.Host) {
 	}
 	var cfg map[string]string
 	a.async(key, func() (err error) {
-		cfg, err = a.loadConfig(connector.ClientConfigKey(sendName, host.Address), textsender.ClientFields())
+		cfg, err = a.loadConfig(sendName, host.Address, textsender.ClientFields())
 		return err
 	}, func(err error) {
 		if err != nil {

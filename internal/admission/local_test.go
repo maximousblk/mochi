@@ -57,7 +57,14 @@ func TestLocalApprovalRenewsOnDemand(t *testing.T) {
 	if err := g.Approve(k); err != nil {
 		t.Fatal(err)
 	}
-	g.db.Exec(`UPDATE clients SET expires = ? WHERE node_key = ?`, time.Now().Add(-48*time.Hour).Unix(), k.String())
+	record, err := g.app.FindFirstRecordByData("clients", "node_key", k.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.Set("expires", time.Now().Add(-48*time.Hour))
+	if err := g.app.Save(record); err != nil {
+		t.Fatal(err)
+	}
 	g.MaxProbation = 0 // no slots: only an approval can pass
 	if !g.allowClient(k) {
 		t.Fatal("a host-approved node was refused after its certificate ran out")

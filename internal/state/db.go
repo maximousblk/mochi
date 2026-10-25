@@ -1,41 +1,33 @@
 package state
 
 import (
+	"crypto/ed25519"
 	"database/sql"
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
-	"path/filepath"
-	"strconv"
+	"strings"
 
-	"crypto/ed25519"
+	"github.com/pocketbase/dbx"
+	"github.com/pocketbase/pocketbase/core"
 	"github.com/tailscale/tailcat"
-	_ "modernc.org/sqlite"
 	"tailscale.com/tailcfg"
 )
 
-// bootstrap.json is compiled into Mochi and is never written by the app.
-// It is applied once during startup, before normal state reads begin.
-//
 //go:embed bootstrap.json
 var bootstrapData []byte
 
 type Bootstrap struct {
-	Settings map[string]json.RawMessage `json:"settings"`
-	// TrustedKeys are the Mochi machines whose approvals this build honors,
-	// besides each host's own. Key is the machine's Ed25519 public key in hex.
 	TrustedKeys []struct {
 		Name string `json:"name"`
 		Key  string `json:"key"`
 	} `json:"trusted_keys"`
 }
 
-// TrustedKeys returns the keys in the embedded bootstrap. A malformed or
-// duplicate entry is an error: a skipped key would silently shrink the trust set.
+// TrustedKeys returns the build-time keys trusted to approve clients.
 func TrustedKeys() ([]ed25519.PublicKey, error) {
 	var bootstrap Bootstrap
 	if err := json.Unmarshal(bootstrapData, &bootstrap); err != nil {
@@ -57,328 +49,253 @@ func TrustedKeys() ([]ed25519.PublicKey, error) {
 	return out, nil
 }
 
-// OpenDB opens the state database the way every Mochi process must. The GUI
-// writes the clients table as connections arrive, so a writer waits up to 5 s
-// for another's write lock instead of failing at once with SQLITE_BUSY, and
-// readers do not block the writer (WAL). Each process uses one connection.
-func OpenDB(path string) (*sql.DB, error) {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return nil, err
-	}
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}
-	if abs[0] != '/' { // a Windows drive path: file:///C:/Users/...
-		u.Path = "/" + u.Path
-	}
-	u.RawQuery = url.Values{"_pragma": {"busy_timeout(5000)", "journal_mode(WAL)"}}.Encode()
-	db, err := sql.Open("sqlite", u.String())
-	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(1)
-	if err := db.Ping(); err != nil {
-		db.Close()
-		return nil, err
-	}
-	return db, nil
-}
-
-type StateStore struct {
-	db   *sql.DB
-	path string
-}
-
-func OpenState(path, legacyPath string) (*StateStore, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return nil, err
-	}
-	db, err := OpenDB(path)
-	if err != nil {
-		return nil, err
-	}
-	store := &StateStore{db: db, path: path}
-	if err := store.init(); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := store.applyBootstrap(); err != nil {
-		db.Close()
-		return nil, err
-	}
-	if err := store.migrateLegacy(legacyPath); err != nil {
-		db.Close()
-		return nil, err
-	}
-	return store, nil
-}
-
-// Host is a Tailcat host this machine connects to.
 type Host struct {
 	Name    string
 	Address string
 }
+type Store struct{ app *core.BaseApp }
 
-func (s *StateStore) init() error {
-	_, err := s.db.Exec(`
-CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY NOT NULL,
-    value TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS hosts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    address TEXT NOT NULL UNIQUE
-);
-INSERT INTO settings(key, value) VALUES ('server_enabled', 'false')
-    ON CONFLICT(key) DO NOTHING;
-CREATE TABLE IF NOT EXISTS certs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    cert BLOB NOT NULL UNIQUE
-);
-CREATE TABLE IF NOT EXISTS received_texts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sender TEXT NOT NULL,
-    body TEXT NOT NULL,
-    received_at INTEGER NOT NULL
-);
-`)
-	return err
+func (s *Store) App() core.App   { return s.app }
+func (s *Store) DataDir() string { return s.app.DataDir() }
+func (s *Store) Close() error    { return s.app.ClearBootstrap() }
+func (s *Store) machine() (*core.Record, error) {
+	return s.app.FindRecordById("machine", "machine00000000")
+}
+func mustCollection(app core.App, name string) *core.Collection {
+	c, _ := app.FindCollectionByNameOrId(name)
+	return c
 }
 
-func (s *StateStore) applyBootstrap() error {
-	var bootstrap Bootstrap
-	if err := json.Unmarshal(bootstrapData, &bootstrap); err != nil {
-		return fmt.Errorf("parse embedded bootstrap: %w", err)
+// recordMissing reports whether a PocketBase lookup found no record.
+func recordMissing(err error) bool { return errors.Is(err, sql.ErrNoRows) }
+func lower(s string) string        { return strings.ToLower(s) }
+
+// Open bootstraps the embedded PocketBase application and creates the machine record once.
+func Open(dataDir string) (*Store, error) {
+	if err := os.MkdirAll(dataDir, 0700); err != nil {
+		return nil, err
 	}
-	for key, raw := range bootstrap.Settings {
-		if _, err := s.db.Exec(`INSERT INTO settings(key, value) VALUES (?, ?)
-ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, string(raw)); err != nil {
-			return fmt.Errorf("apply bootstrap setting %q: %w", key, err)
+	app := core.NewBaseApp(core.BaseAppConfig{DataDir: dataDir})
+	if err := app.Bootstrap(); err != nil {
+		return nil, err
+	}
+	if err := app.RunAllMigrations(); err != nil {
+		_ = app.ClearBootstrap()
+		return nil, err
+	}
+	s := &Store{app: app}
+	if _, err := app.FindRecordById("machine", "machine00000000"); recordMissing(err) {
+		record := core.NewRecord(mustCollection(app, "machine"))
+		record.Id = "machine00000000"
+		record.Set("server_enabled", false)
+		psk := tailcat.NewPresharedKey()
+		pskText, err := psk.MarshalText()
+		if err != nil {
+			_ = app.ClearBootstrap()
+			return nil, err
+		}
+		record.Set("server_psk", string(pskText))
+		record.Set("server_region", 0)
+		record.Set("identity_seed", hex.EncodeToString(NewIdentity().Seed()))
+		if err := app.Save(record); err != nil {
+			_ = app.ClearBootstrap()
+			return nil, err
+		}
+	} else if err != nil {
+		_ = app.ClearBootstrap()
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *Store) Hosts() ([]Host, error) {
+	recs, err := s.app.FindAllRecords("hosts")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Host, 0, len(recs))
+	for _, r := range recs {
+		out = append(out, Host{r.GetString("name"), r.GetString("address")})
+	}
+	return out, nil
+}
+func (s *Store) AddHost(h Host) error {
+	r := core.NewRecord(mustCollection(s.app, "hosts"))
+	r.Set("name", h.Name)
+	r.Set("address", h.Address)
+	return s.app.Save(r)
+}
+func (s *Store) DeleteHost(address string) error {
+	r, err := s.app.FindFirstRecordByData("hosts", "address", address)
+	if recordMissing(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return s.app.Delete(r)
+}
+func (s *Store) ServerEnabled() (bool, error) {
+	r, e := s.machine()
+	if e != nil {
+		return false, e
+	}
+	return r.GetBool("server_enabled"), nil
+}
+func (s *Store) SetServerEnabled(v bool) error {
+	r, e := s.machine()
+	if e != nil {
+		return e
+	}
+	r.Set("server_enabled", v)
+	return s.app.Save(r)
+}
+func (s *Store) Serving(name string) (bool, error) {
+	r, e := s.app.FindFirstRecordByData("launchers", "name", lower(name))
+	if recordMissing(e) {
+		return false, nil
+	}
+	if e != nil {
+		return false, e
+	}
+	return r.GetBool("serving"), nil
+}
+func (s *Store) SetServing(name string, on bool) error {
+	name = lower(name)
+	r, e := s.app.FindFirstRecordByData("launchers", "name", name)
+	if recordMissing(e) {
+		r = core.NewRecord(mustCollection(s.app, "launchers"))
+		r.Set("name", name)
+	} else if e != nil {
+		return e
+	}
+	r.Set("serving", on)
+	return s.app.Save(r)
+}
+func (s *Store) LauncherConfig(launcher, hostAddress string) (map[string]string, error) {
+	launcher, host := lower(launcher), ""
+	if hostAddress != "" {
+		h, err := s.app.FindFirstRecordByData("hosts", "address", hostAddress)
+		if recordMissing(err) {
+			return map[string]string{}, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		host = h.Id
+	}
+	recs, err := s.app.FindRecordsByFilter("launcher_settings", "launcher = {:launcher} && host = {:host}", "", 0, 0, dbx.Params{"launcher": launcher, "host": host})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(recs))
+	for _, r := range recs {
+		out[r.GetString("key")] = r.GetString("value")
+	}
+	return out, nil
+}
+
+// SetLauncherConfig replaces all settings for one launcher and host pair.
+func (s *Store) SetLauncherConfig(launcher, hostAddress string, cfg map[string]string) error {
+	launcher, host := lower(launcher), ""
+	if hostAddress != "" {
+		h, err := s.app.FindFirstRecordByData("hosts", "address", hostAddress)
+		if err != nil {
+			return err
+		}
+		host = h.Id
+	}
+	params := dbx.Params{"launcher": launcher, "host": host}
+	return s.app.RunInTransaction(func(tx core.App) error {
+		old, err := tx.FindRecordsByFilter("launcher_settings", "launcher = {:launcher} && host = {:host}", "", 0, 0, params)
+		if err != nil {
+			return err
+		}
+		for _, r := range old {
+			if err := tx.Delete(r); err != nil {
+				return err
+			}
+		}
+		for k, v := range cfg {
+			r := core.NewRecord(mustCollection(tx, "launcher_settings"))
+			r.Set("launcher", launcher)
+			r.Set("host", host)
+			r.Set("key", k)
+			r.Set("value", v)
+			if err := tx.Save(r); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+func (s *Store) Identity() (Identity, error) {
+	r, e := s.machine()
+	if e != nil {
+		return Identity{}, e
+	}
+	seed, e := hex.DecodeString(r.GetString("identity_seed"))
+	if e != nil || len(seed) != ed25519.SeedSize {
+		return Identity{}, errors.New("stored identity seed is malformed")
+	}
+	return IdentityFromSeed(seed), nil
+}
+func (s *Store) ServerParams() (tailcat.PresharedKey, tailcfg.DERPRegionID, error) {
+	var p tailcat.PresharedKey
+	r, e := s.machine()
+	if e != nil {
+		return p, 0, e
+	}
+	if e = p.UnmarshalText([]byte(r.GetString("server_psk"))); e != nil {
+		return p, 0, e
+	}
+	return p, tailcfg.DERPRegionID(r.GetInt("server_region")), nil
+}
+func (s *Store) SaveRegion(id tailcfg.DERPRegionID) error {
+	r, e := s.machine()
+	if e != nil {
+		return e
+	}
+	r.Set("server_region", int(id))
+	return s.app.Save(r)
+}
+func (s *Store) Certs() ([][]byte, error) {
+	recs, e := s.app.FindAllRecords("certs")
+	if e != nil {
+		return nil, e
+	}
+	out := make([][]byte, 0, len(recs))
+	for _, r := range recs {
+		b, e := hex.DecodeString(r.GetString("cert"))
+		if e != nil {
+			return nil, e
+		}
+		out = append(out, b)
+	}
+	return out, nil
+}
+func (s *Store) AddCert(cert []byte) error {
+	v := hex.EncodeToString(cert)
+	_, e := s.app.FindFirstRecordByData("certs", "cert", v)
+	if e == nil {
+		return nil
+	}
+	if !recordMissing(e) {
+		return e
+	}
+	r := core.NewRecord(mustCollection(s.app, "certs"))
+	r.Set("cert", v)
+	return s.app.Save(r)
+}
+func (s *Store) DeleteCerts() error {
+	recs, e := s.app.FindAllRecords("certs")
+	if e != nil {
+		return e
+	}
+	for _, r := range recs {
+		if e = s.app.Delete(r); e != nil {
+			return e
 		}
 	}
 	return nil
 }
-
-func (s *StateStore) migrateLegacy(path string) error {
-	if path == "" {
-		return nil
-	}
-	var count int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM hosts`).Scan(&count); err != nil || count != 0 {
-		return err
-	}
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	var legacy struct {
-		Hosts []Host `json:"hosts"`
-	}
-	if err := json.Unmarshal(data, &legacy); err != nil {
-		return fmt.Errorf("parse legacy host config: %w", err)
-	}
-	for _, host := range legacy.Hosts {
-		if _, err := s.db.Exec(`INSERT INTO hosts(name, address) VALUES (?, ?)
-ON CONFLICT(address) DO NOTHING`, host.Name, host.Address); err != nil {
-			return err
-		}
-	}
-	// The old JSON file is no longer application state after migration.
-	return os.Remove(path)
-}
-
-func (s *StateStore) Hosts() ([]Host, error) {
-	rows, err := s.db.Query(`SELECT name, address FROM hosts ORDER BY id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var hosts []Host
-	for rows.Next() {
-		var host Host
-		if err := rows.Scan(&host.Name, &host.Address); err != nil {
-			return nil, err
-		}
-		hosts = append(hosts, host)
-	}
-	return hosts, rows.Err()
-}
-
-func (s *StateStore) AddHost(host Host) error {
-	_, err := s.db.Exec(`INSERT INTO hosts(name, address) VALUES (?, ?)`, host.Name, host.Address)
-	return err
-}
-
-func (s *StateStore) DeleteHost(address string) error {
-	_, err := s.db.Exec(`DELETE FROM hosts WHERE address = ?`, address)
-	return err
-}
-
-func (s *StateStore) BoolSetting(key string) (bool, error) {
-	var value string
-	if err := s.db.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&value); err != nil {
-		return false, err
-	}
-	var result bool
-	if err := json.Unmarshal([]byte(value), &result); err != nil {
-		return false, fmt.Errorf("decode setting %q: %w", key, err)
-	}
-	return result, nil
-}
-
-func (s *StateStore) StringSetting(key string) (string, error) {
-	var value string
-	if err := s.db.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&value); err != nil {
-		return "", err
-	}
-	var result string
-	if err := json.Unmarshal([]byte(value), &result); err != nil {
-		return "", fmt.Errorf("decode setting %q: %w", key, err)
-	}
-	return result, nil
-}
-
-func (s *StateStore) SetBool(key string, value bool) error {
-	encoded, _ := json.Marshal(value)
-	_, err := s.db.Exec(`INSERT INTO settings(key, value) VALUES (?, ?)
-ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, string(encoded))
-	return err
-}
-
-// Config returns the launcher config saved under key. A missing key is an empty
-// config, not an error, because a launcher that was never configured runs on its
-// defaults.
-func (s *StateStore) Config(key string) (map[string]string, error) {
-	var value string
-	err := s.db.QueryRow(`SELECT value FROM settings WHERE key = ?`, key).Scan(&value)
-	if errors.Is(err, sql.ErrNoRows) {
-		return map[string]string{}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var config map[string]string
-	if err := json.Unmarshal([]byte(value), &config); err != nil {
-		return nil, fmt.Errorf("decode config %q: %w", key, err)
-	}
-	if config == nil {
-		config = map[string]string{}
-	}
-	return config, nil
-}
-
-// SetConfig saves the launcher config under key, replacing what was saved.
-func (s *StateStore) SetConfig(key string, config map[string]string) error {
-	encoded, err := json.Marshal(config)
-	if err != nil {
-		return err
-	}
-	_, err = s.db.Exec(`INSERT INTO settings(key, value) VALUES (?, ?)
-ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, string(encoded))
-	return err
-}
-
-// Identity returns this machine's identity, creating it on first use. The seed
-// is kept in the state database; a keychain is planned. Installs from before
-// identities existed had a random client key that cannot become a seed, so
-// they start a new identity.
-func (s *StateStore) Identity() (Identity, error) {
-	encoded, err := s.StringSetting("identity_seed")
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return Identity{}, err
-	}
-	if err == nil && encoded != "" {
-		seed, err := hex.DecodeString(encoded)
-		if err != nil || len(seed) != ed25519.SeedSize {
-			return Identity{}, errors.New("stored identity seed is malformed")
-		}
-		return IdentityFromSeed(seed), nil
-	}
-	id := NewIdentity()
-	if err := s.SetString("identity_seed", hex.EncodeToString(id.Seed())); err != nil {
-		return Identity{}, err
-	}
-	return id, nil
-}
-
-// ServerParams returns the pre-shared key and relay region this machine's
-// server keeps across restarts, creating the key on first use. The region is
-// zero until SaveRegion records one.
-func (s *StateStore) ServerParams() (tailcat.PresharedKey, tailcfg.DERPRegionID, error) {
-	var psk tailcat.PresharedKey
-	encoded, err := s.StringSetting("server_psk")
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return psk, 0, err
-	}
-	if err == nil && encoded != "" {
-		if err := psk.UnmarshalText([]byte(encoded)); err != nil {
-			return psk, 0, fmt.Errorf("decode stored server key: %w", err)
-		}
-	} else {
-		psk = tailcat.NewPresharedKey()
-		text, err := psk.MarshalText()
-		if err != nil {
-			return psk, 0, err
-		}
-		if err := s.SetString("server_psk", string(text)); err != nil {
-			return psk, 0, err
-		}
-	}
-	region, err := s.StringSetting("server_region_id")
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return psk, 0, err
-	}
-	id, _ := strconv.Atoi(region)
-	return psk, tailcfg.DERPRegionID(id), nil
-}
-
-func (s *StateStore) SaveRegion(id tailcfg.DERPRegionID) error {
-	return s.SetString("server_region_id", strconv.Itoa(int(id)))
-}
-
-// Certs lists the certificates this machine presents to hosts.
-func (s *StateStore) Certs() ([][]byte, error) {
-	rows, err := s.db.Query(`SELECT cert FROM certs ORDER BY id DESC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out [][]byte
-	for rows.Next() {
-		var c []byte
-		if err := rows.Scan(&c); err != nil {
-			return nil, err
-		}
-		out = append(out, c)
-	}
-	return out, rows.Err()
-}
-
-func (s *StateStore) AddCert(cert []byte) error {
-	_, err := s.db.Exec(`INSERT INTO certs(cert) VALUES (?) ON CONFLICT(cert) DO NOTHING`, cert)
-	return err
-}
-
-// DeleteSetting removes a setting. A missing key is not an error.
-func (s *StateStore) DeleteSetting(key string) error {
-	_, err := s.db.Exec(`DELETE FROM settings WHERE key = ?`, key)
-	return err
-}
-
-func (s *StateStore) SetString(key, value string) error {
-	encoded, _ := json.Marshal(value)
-	_, err := s.db.Exec(`INSERT INTO settings(key, value) VALUES (?, ?)
-ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, string(encoded))
-	return err
-}
-
-func (s *StateStore) Close() error { return s.db.Close() }
-
-// DB returns the database handle, for the admission gate, which keeps its own tables in it.
-func (s *StateStore) DB() *sql.DB { return s.db }
-
-// DatabasePath returns the file the store was opened from.
-func (s *StateStore) DatabasePath() string { return s.path }

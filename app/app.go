@@ -6,7 +6,6 @@ package app
 import (
 	"context"
 	"crypto/ed25519"
-	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -68,7 +67,7 @@ type app struct {
 	// clientsReload runs the reads of clients off the UI thread, one at a time,
 	// with a read after the last request so the lists catch up with a change.
 	clientsReload reload
-	store         *state.StateStore
+	store         *state.Store
 	lastTrayClick time.Time // when the tray icon was last clicked, for double clicks
 	connectors    []connector.Connector
 	// servers is every launcher's server side, in the order the Settings page
@@ -132,22 +131,22 @@ func Run(args []string) error {
 	// Mochi lives in the menu bar until its window opens: no Dock icon in
 	// the background. showWindow and the close handler switch it per window.
 	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
-	statePath, err := state.Path()
+	dataDir, err := state.DataDir()
 	if err != nil {
 		return err
 	}
-	legacyPath, err := state.LegacyPath()
-	if err != nil {
-		return err
-	}
-	store, err := state.OpenState(statePath, legacyPath)
+	store, err := state.Open(dataDir)
 	if err != nil {
 		return fmt.Errorf("opening state: %w", err)
+	}
+	stateDir, err := state.Dir()
+	if err != nil {
+		return err
 	}
 	// A GUI app has no console, so what it logs also goes to mochi.log beside
 	// the database. The Settings page shows this path. If the file cannot be
 	// opened, logging stays on stderr.
-	logPath := filepath.Join(filepath.Dir(statePath), "mochi.log")
+	logPath := filepath.Join(stateDir, "mochi.log")
 	if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
 		defer f.Close()
 		log.SetOutput(io.MultiWriter(os.Stderr, f))
@@ -220,12 +219,12 @@ func Run(args []string) error {
 // load reads everything the app starts from out of store: hosts, the server
 // setting, this machine's identity, the trusted keys and the launchers. It runs
 // before the window opens, so it may read and listen synchronously.
-func (a *app) load(store *state.StateStore) (err error) {
+func (a *app) load(store *state.Store) (err error) {
 	a.store = store
 	if a.hosts, err = store.Hosts(); err != nil {
 		return fmt.Errorf("loading hosts: %w", err)
 	}
-	if a.serverEnabled, err = store.BoolSetting("server_enabled"); err != nil {
+	if a.serverEnabled, err = store.ServerEnabled(); err != nil {
 		return fmt.Errorf("loading server setting: %w", err)
 	}
 	if a.identity, err = store.Identity(); err != nil {
@@ -250,10 +249,12 @@ func (a *app) load(store *state.StateStore) (err error) {
 		return fmt.Errorf("loading inbox: %w", err)
 	}
 	for _, c := range a.servers {
-		on, err := store.BoolSetting(connector.SettingKey(c))
-		switch {
-		case err == nil && on:
-			cfg, cerr := a.loadConfig(connector.ServerConfigKey(c), c.ServerFields())
+		on, err := store.Serving(c.Name())
+		if err != nil {
+			return fmt.Errorf("loading %s server setting: %w", c.Name(), err)
+		}
+		if on {
+			cfg, cerr := a.loadConfig(c.Name(), "", c.ServerFields())
 			if cerr != nil {
 				a.say(page{}, c.Name()+" settings not loaded, using defaults: "+cerr.Error())
 			}
@@ -262,12 +263,8 @@ func (a *app) load(store *state.StateStore) (err error) {
 			} else {
 				a.serving[c.Name()] = true
 			}
-		case err == nil:
-			if err := c.Stop(); err != nil {
-				a.say(page{}, c.Name()+" server not stopped: "+err.Error())
-			}
-		case !errors.Is(err, sql.ErrNoRows):
-			return fmt.Errorf("loading %s server setting: %w", c.Name(), err)
+		} else if err := c.Stop(); err != nil {
+			a.say(page{}, c.Name()+" server not stopped: "+err.Error())
 		}
 	}
 	return nil
@@ -353,7 +350,6 @@ func serveOp(name string) string { return "serve|" + name }
 func (a *app) toggleServing(lc connector.Server) {
 	name := lc.Name()
 	on := a.serving[name]
-	key := connector.ServerConfigKey(lc)
 	var warn, saveErr error
 	a.async(serveOp(name), func() error {
 		if on {
@@ -361,13 +357,13 @@ func (a *app) toggleServing(lc connector.Server) {
 				return err
 			}
 		} else {
-			cfg, err := a.loadConfig(key, lc.ServerFields())
+			cfg, err := a.loadConfig(name, "", lc.ServerFields())
 			warn = err
 			if err := lc.Listen(cfg); err != nil {
 				return err
 			}
 		}
-		saveErr = a.store.SetBool(connector.SettingKey(lc), !on)
+		saveErr = a.store.SetServing(name, !on)
 		return nil
 	}, func(err error) {
 		if warn != nil {
@@ -485,7 +481,7 @@ func (a *app) removeHost(address string, failed func(error)) {
 		if err := a.store.DeleteHost(address); err != nil {
 			return fmt.Errorf("delete host from state: %w", err)
 		}
-		return a.deleteClientConfigs(address)
+		return nil
 	}, func(err error) {
 		if err != nil {
 			a.say(hostScope(address), "Remove failed: "+err.Error())
@@ -525,7 +521,7 @@ func (a *app) launchServer() (*tailcat.Server, *admission.Gate, context.CancelFu
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	gate, err := admission.NewGate(a.store.DB(), a.identity.Private(), a.trusted)
+	gate, err := admission.NewGate(a.store.App(), a.identity.Private(), a.trusted)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -577,7 +573,7 @@ func (a *app) startServer() {
 		s, gate, stop, err = a.launchServer()
 		if err != nil {
 			log.Printf("server failed to start: %v", err)
-			_ = a.store.SetBool("server_enabled", false)
+			_ = a.store.SetServerEnabled(false)
 		}
 		return err
 	}, func(err error) {
@@ -603,7 +599,7 @@ func (a *app) serverSwitched() {
 	}
 	on := a.serverEnabled
 	go func() {
-		err := a.store.SetBool("server_enabled", on)
+		err := a.store.SetServerEnabled(on)
 		a.update(func() {
 			if err != nil {
 				a.say(page{}, "Saving server setting failed: "+err.Error())

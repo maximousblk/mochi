@@ -1,49 +1,21 @@
 # State
 
-Mochi keeps its state in one SQLite database, `mochi.db`, in the user config
-directory:
+Mochi uses PocketBase as an embedded, headless Go library. It never serves PocketBase's HTTP API. PocketBase stores its databases in the per-user data directory:
 
 ```text
-Linux:   ~/.config/mochi/mochi.db
-macOS:   ~/Library/Application Support/mochi/mochi.db
-Windows: %AppData%\mochi\mochi.db
+Linux:   ~/.config/mochi/data/
+macOS:   ~/Library/Application Support/mochi/data/
+Windows: %AppData%\mochi\data\
 ```
 
-The database runs in WAL mode. Writers wait on a busy timeout rather than
-failing at once.
+The directory contains PocketBase's `data.db` and auxiliary database. Collections and typed fields are installed by Go migrations. Hosts, launcher settings, machine identity and server parameters, certificates, received texts, and admission clients are PocketBase records. Host deletion cascades to its launcher settings. Received texts are pruned to the newest 100 records.
 
-## What is stored
-
-- **Hosts:** name and Tailcat address.
-- **Settings:** the Tailcat server switch and each launcher's server switch.
-- **Connections** are not stored. A launcher's connection to a host exists only
-  while Mochi runs, and is closed when it has been idle for six hours.
-- **Identity:** the machine's Ed25519 seed. Its public half is the machine key
-  shown on the **This device** page. See [Admission](ADMISSION.md).
-- **Server:** the server's node key, pre-shared key and relay region. They
-  persist across restarts, so the server address stays the same.
-- **Admission:** trusted CA keys, approved and blocked clients, and the
-  certificates pasted into Settings.
-
-## Security
-
-The identity seed is stored unencrypted in `mochi.db`. Anyone who can read the
-file can act as this machine. Moving the seed to the platform keychain is
-planned, not implemented.
+The machine identity seed and server pre-shared key are hidden record fields, but are stored unencrypted. Anyone who can read the data directory can act as this machine. Moving secrets to the platform keychain is not implemented.
 
 ## Logs
 
-Mochi logs to `mochi.log`, beside `mochi.db`, as well as to stderr: server
-start failures, tray problems and the like. It is appended to and never
-rotated.
-
-The **Settings** page shows the path of `mochi.log` with a button that opens its folder.
-
-WebDAV errors go to `webdav.log`, beside `mochi.db`. Start Mochi with
-`--verbose` to log every WebDAV request and its status.
+`mochi.log` and `webdav.log` remain in the per-user Mochi directory (the parent of `data/`). Mochi appends logs and does not rotate them. The Settings page shows the PocketBase data directory.
 
 ## Upgrades
 
-- Installs from before identities existed had a random client key that cannot
-  become a seed. They start a new identity, and hosts that knew the old client
-  key must approve the new one.
+Mochi does not import the former `mochi.db` or legacy `config.json`. Existing data must be migrated by hand outside the app. Installs from before identities existed had a random client key that cannot become a seed; hosts that knew the old client key must approve the new one.

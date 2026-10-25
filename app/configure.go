@@ -28,12 +28,12 @@ func clientTarget(name string, host state.Host, fields []connector.Field) config
 	return configTarget{title: name + " for " + host.Name, fields: fields, name: name, host: host}
 }
 
-// key is the settings key the target's config is saved under.
+// key identifies the target's dialog without relying on serialized settings keys.
 func (t configTarget) key() string {
 	if t.server != nil {
-		return connector.ServerConfigKey(t.server)
+		return "server:" + t.server.Name()
 	}
-	return connector.ClientConfigKey(t.name, t.host.Address)
+	return "client:" + t.name + ":" + t.host.Address
 }
 
 // dialogKey is the identity of the target's Configure window. A target has one
@@ -61,8 +61,8 @@ type configDialog struct {
 // saved config that no longer resolves, such as a folder that was removed, falls
 // back to the defaults, and the error says why. It reads the store, so callers
 // run it off the UI thread.
-func (a *app) loadConfig(key string, fields []connector.Field) (connector.Config, error) {
-	saved, err := a.store.Config(key)
+func (a *app) loadConfig(launcher, hostAddress string, fields []connector.Field) (connector.Config, error) {
+	saved, err := a.store.LauncherConfig(launcher, hostAddress)
 	if err == nil {
 		var cfg connector.Config
 		if cfg, err = connector.Resolve(fields, saved); err == nil {
@@ -76,18 +76,6 @@ func (a *app) loadConfig(key string, fields []connector.Field) (connector.Config
 	return defaults, err
 }
 
-// deleteClientConfigs forgets the client settings every launcher kept for the
-// host at address, so a removed host leaves nothing behind. It reads and writes
-// the store, so callers run it off the UI thread.
-func (a *app) deleteClientConfigs(address string) error {
-	for _, s := range a.servers {
-		if err := a.store.DeleteSetting(connector.ClientConfigKey(s.Name(), address)); err != nil {
-			return fmt.Errorf("delete %s settings for host: %w", s.Name(), err)
-		}
-	}
-	return nil
-}
-
 // openConfig opens the Configure window on t, showing the settings it has now.
 // The settings are read off the UI thread, so the window opens once they are
 // loaded. A window already open for t is focused instead.
@@ -96,9 +84,13 @@ func (a *app) openConfig(t configTarget) {
 		d.win.Focus()
 		return
 	}
-	var cfg map[string]string
+	var cfg connector.Config
 	a.async(t.dialogKey(), func() (err error) {
-		cfg, err = a.loadConfig(t.key(), t.fields)
+		name := t.name
+		if t.server != nil {
+			name = t.server.Name()
+		}
+		cfg, err = a.loadConfig(name, t.hostAddress(), t.fields)
 		return err
 	}, func(err error) {
 		if err != nil {
@@ -164,7 +156,7 @@ func (a *app) saveConfig(d *configDialog) {
 	}
 	key := t.dialogKey()
 	if t.server == nil {
-		a.async(key, func() error { return a.store.SetConfig(t.key(), cfg) }, func(err error) {
+		a.async(key, func() error { return a.store.SetLauncherConfig(t.name, t.host.Address, cfg) }, func(err error) {
 			if err != nil {
 				d.err = "save settings: " + err.Error()
 				return
@@ -202,12 +194,11 @@ func (a *app) saveConfig(d *configDialog) {
 // serves with it. If cfg does not listen, the previous config is listened again,
 // so the server stays up. It runs off the UI thread.
 func (a *app) applyServerConfig(s connector.Server, cfg connector.Config, serving bool) (bool, error) {
-	key := connector.ServerConfigKey(s)
 	name := s.Name()
 	if !serving {
-		return false, a.store.SetConfig(key, cfg)
+		return false, a.store.SetLauncherConfig(name, "", cfg)
 	}
-	previous, _ := a.loadConfig(key, s.ServerFields())
+	previous, _ := a.loadConfig(name, "", s.ServerFields())
 	if err := s.Stop(); err != nil {
 		return true, fmt.Errorf("%s server not stopped: %w", name, err)
 	}
@@ -217,7 +208,7 @@ func (a *app) applyServerConfig(s connector.Server, cfg connector.Config, servin
 		}
 		return true, fmt.Errorf("%s server not started, still serving with the previous settings: %w", name, err)
 	}
-	return true, a.store.SetConfig(key, cfg)
+	return true, a.store.SetLauncherConfig(name, "", cfg)
 }
 
 // scope is the page whose status reports on this target. A server is on the

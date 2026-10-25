@@ -22,7 +22,7 @@
       lib = nixpkgs.lib;
 
       version = (builtins.fromJSON (builtins.readFile ./mygo.json)).version;
-      vendorHash = "sha256-4DC5NbaCIo0TCvTrOz06rfS8GiWXaZyydhaoK1YmUxk=";
+      vendorHash = "sha256-C/Wh8oiP3KFW7ECXEjk4IkzqHDIidE0x5qj0tATUkMo=";
 
       targets = {
         x86_64-linux = { goos = "linux"; goarch = "amd64"; host = "x86_64-linux"; };

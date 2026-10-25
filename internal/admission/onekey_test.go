@@ -37,7 +37,7 @@ func TestServerRestart(t *testing.T) {
 	relay := testharness.Relay(t)
 	id, psk, db := state.NewIdentity(), tailcat.NewPresharedKey(), openDB(t)
 	start := func() (*Gate, *tailcat.Server) {
-		g, err := NewGate(db, id.Private(), nil)
+		g, err := NewGate(db.App(), id.Private(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -84,7 +84,7 @@ func TestServeAndDialOnOneMachine(t *testing.T) {
 	relay := testharness.Relay(t)
 	idA, idB := state.NewIdentity(), state.NewIdentity()
 	mk := func(id state.Identity) *Gate {
-		g, err := NewGate(openDB(t), id.Private(), nil)
+		g, err := NewGate(openDB(t).App(), id.Private(), nil)
 		if err != nil {
 			t.Fatal(err)
 		}

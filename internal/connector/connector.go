@@ -6,7 +6,6 @@ package connector
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -17,8 +16,8 @@ import (
 // Server is a launcher's server side: the Tailcat port this machine serves for
 // the launcher, and the switch that turns it on or off.
 type Server interface {
-	// Name is the launcher's label, such as "SSH". Its lowercase form is part
-	// of the settings key that stores the server-side switch (SettingKey).
+	// Name is the launcher's label, such as "SSH". Mochi stores it lowercase
+	// as the launcher's stable record name.
 	Name() string
 	// Icon is drawn on the launcher's tile.
 	Icon() *ui.SVG
@@ -61,23 +60,6 @@ type Client interface {
 	LastUsed() time.Time
 	// Disconnect closes the client. It is idempotent.
 	Disconnect() error
-}
-
-// SettingKey is the settings key a launcher's server-side switch is saved under.
-func SettingKey(c Server) string {
-	return "connector_server:" + strings.ToLower(c.Name())
-}
-
-// ServerConfigKey is the settings key a launcher's server-side config is saved under.
-func ServerConfigKey(c Server) string {
-	return "connector_config:server:" + strings.ToLower(c.Name())
-}
-
-// ClientConfigKey is the settings key a launcher's client config for one host is
-// saved under. The host address is part of the key because each host has its own
-// settings.
-func ClientConfigKey(name, hostAddress string) string {
-	return "connector_config:client:" + strings.ToLower(name) + ":" + hostAddress
 }
 
 // ParseHost decodes a host's Tailcat address.

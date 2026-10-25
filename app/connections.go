@@ -51,7 +51,7 @@ func (a *app) toggleConnection(host state.Host, lc connector.Connector) {
 	a.say(scope, name+" connecting…")
 	a.async(op, func() error {
 		var cfg connector.Config
-		cfg, loadErr = a.loadConfig(connector.ClientConfigKey(name, address), lc.ClientFields())
+		cfg, loadErr = a.loadConfig(name, address, lc.ClientFields())
 		var err error
 		client, err = lc.Connect(host, cfg)
 		return err

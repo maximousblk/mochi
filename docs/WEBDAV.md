@@ -47,7 +47,7 @@ it refuses the others before any request reaches the share.
 
 ## Logs
 
-Errors are written to `webdav.log` beside `mochi.db`. Start Mochi with
+Errors are written to `webdav.log` in the per-user Mochi directory. Start Mochi with
 `--verbose` to log every request and its status. See [State](STATE.md#logs).
 
 ## Settings

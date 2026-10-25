@@ -2,7 +2,6 @@ package state
 
 import (
 	"fmt"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -10,7 +9,7 @@ import (
 // Texts come back newest first, only the newest 100 are kept, and delete
 // removes exactly one.
 func TestReceivedTextsNewestFirstPrunedAndDeletable(t *testing.T) {
-	store, err := OpenState(filepath.Join(t.TempDir(), "mochi.db"), "")
+	store, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

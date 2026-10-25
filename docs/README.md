@@ -49,7 +49,7 @@ Then:
 
 ## Known limits
 
-- The machine's identity seed is stored unencrypted in the SQLite state.
+- The machine's identity seed is stored unencrypted in the embedded PocketBase database.
 - No keychain integration, signed releases or installers yet.
 - An approved client may use every service the server offers.
 

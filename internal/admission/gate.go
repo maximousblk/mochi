@@ -3,19 +3,19 @@ package admission
 import (
 	"context"
 	"crypto/ed25519"
-	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/pocketbase/dbx"
+	"github.com/pocketbase/pocketbase/core"
+	"github.com/tailscale/tailcat"
 	"io"
 	"net"
 	"sort"
 	"strings"
 	"sync"
-	"time"
-
-	"github.com/tailscale/tailcat"
 	"tailscale.com/types/key"
+	"time"
 )
 
 // ProofPort is the tailcat port a Mochi host answers certificate proofs on.
@@ -35,21 +35,8 @@ const (
 // state changes, so a node that was approved once is "known" until its
 // rejected row is forgotten (RejectTTL). Block, or its CA leaving the trusted
 // set, clears them. Known nodes never count against the probation slots.
-const schema = `
-CREATE TABLE IF NOT EXISTS clients (
-	node_key   TEXT PRIMARY KEY,
-	state      TEXT NOT NULL CHECK (state IN ('probation','approved','rejected','blocked')),
-	ca         TEXT NOT NULL DEFAULT '', -- fingerprint of the CA that last approved it; '' = never approved
-	name       TEXT NOT NULL DEFAULT '', -- who that certificate was issued to
-	expires    INTEGER NOT NULL DEFAULT 0, -- Unix seconds: deadline for the current state; 0 = none
-	reason     TEXT NOT NULL DEFAULT '',
-	first_seen INTEGER NOT NULL,
-	last_seen  INTEGER NOT NULL
-)`
 
-const cols = "node_key, state, ca, name, expires, reason, first_seen, last_seen"
-
-// Client is one row of the clients table.
+// Client is one admission record.
 type Client struct {
 	Key                 key.NodePublic
 	State, CA, Name     string
@@ -69,58 +56,54 @@ const (
 // or from a renewal, goes through admit.
 type Gate struct {
 	ProofPort    uint16
-	MaxProbation int           // never-approved nodes allowed to hold a tunnel at once
-	ProofTimeout time.Duration // how long a node in probation has to be approved
-	RejectTTL    time.Duration // how long a rejected node stays listed
-	MaxRejected  int           // never-approved rejected rows kept; the oldest are dropped
-	LocalTTL     time.Duration // lifetime of a certificate this host signs for itself
+	MaxProbation int
+	ProofTimeout time.Duration
+	RejectTTL    time.Duration
+	MaxRejected  int
+	LocalTTL     time.Duration
 	Logf         func(format string, args ...any)
-
-	srv    *tailcat.Server
-	db     *sql.DB
-	self   ed25519.PrivateKey
-	selfFP string
-
-	mu    sync.Mutex                   // guards db, cas, conns
-	cas   map[string]ed25519.PublicKey // by fingerprint; always includes this host's own key
-	conns map[key.NodePublic]map[net.Conn]bool
+	srv          *tailcat.Server
+	app          core.App
+	self         ed25519.PrivateKey
+	selfFP       string
+	mu           sync.Mutex
+	cas          map[string]ed25519.PublicKey
+	conns        map[key.NodePublic]map[net.Conn]bool
 }
 
-// NewGate prepares the clients table. The gate trusts this host's own key
-// (self) and the given keys, and nothing else: the trusted set is fixed for
-// the life of the gate. At startup, probation rows are dropped as stale, and
-// rows approved by a key that is no longer trusted lose that approval.
-func NewGate(db *sql.DB, self ed25519.PrivateKey, trusted []ed25519.PublicKey) (*Gate, error) {
-	if _, err := db.Exec(schema); err != nil {
-		return nil, err
-	}
-	if _, err := db.Exec(`DELETE FROM clients WHERE state = 'probation'`); err != nil {
-		return nil, err
-	}
+// NewGate reconciles persisted admissions with the current trusted CA set.
+func NewGate(app core.App, self ed25519.PrivateKey, trusted []ed25519.PublicKey) (*Gate, error) {
 	pub := self.Public().(ed25519.PublicKey)
 	g := &Gate{
 		ProofPort: ProofPort, MaxProbation: 32, ProofTimeout: 20 * time.Second,
 		RejectTTL: 24 * time.Hour, MaxRejected: 256, LocalTTL: 24 * time.Hour,
-		db: db, self: self, selfFP: Fingerprint(pub),
-		cas:   map[string]ed25519.PublicKey{},
-		conns: map[key.NodePublic]map[net.Conn]bool{},
+		app: app, self: self, selfFP: Fingerprint(pub),
+		cas: map[string]ed25519.PublicKey{}, conns: map[key.NodePublic]map[net.Conn]bool{},
 	}
 	for _, ca := range append([]ed25519.PublicKey{pub}, trusted...) {
 		g.cas[Fingerprint(ca)] = ca
 	}
-	args := []any{}
-	marks := ""
-	for fp := range g.cas {
-		args = append(args, fp)
-		marks += ",?"
-	}
-	untrusted := `ca != '' AND ca NOT IN (` + marks[1:] + `)`
-	if _, err := db.Exec(`UPDATE clients SET state = 'rejected', reason = 'CA no longer trusted', expires = `+
-		fmt.Sprint(time.Now().Add(g.RejectTTL).Unix())+` WHERE state = 'approved' AND `+untrusted, args...); err != nil {
+	rows, err := app.FindAllRecords("clients")
+	if err != nil {
 		return nil, err
 	}
-	if _, err := db.Exec(`UPDATE clients SET ca = '', name = '' WHERE `+untrusted, args...); err != nil {
-		return nil, err
+	for _, r := range rows {
+		c := clientFromRecord(r)
+		if c.State == Probation {
+			if err := app.Delete(r); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if c.CA != "" && g.cas[c.CA] == nil {
+			if c.State == Approved {
+				c.State, c.Reason, c.Expires = Rejected, "CA no longer trusted", time.Now().Add(g.RejectTTL)
+			}
+			c.CA, c.Name = "", ""
+			if err := g.put(c); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return g, nil
 }
@@ -165,19 +148,18 @@ func (g *Gate) Approve(k key.NodePublic) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.get(k).State == Blocked {
-		g.exec(`DELETE FROM clients WHERE node_key = ?`, k.String())
+		g.delete(k)
 	}
 	return g.approveLocked(k)
 }
 
-// SelfFingerprint names this host's own CA, the one that approves nodes from
-// the Settings page.
+// SelfFingerprint identifies this host's own approval authority.
 func (g *Gate) SelfFingerprint() string { return g.selfFP }
 
 // Block refuses k whatever certificate it presents, and drops it now.
 func (g *Gate) Block(k key.NodePublic) {
 	g.mu.Lock()
-	g.put(Client{Key: k, State: Blocked, Reason: "blocked by admin"})
+	_ = g.put(Client{Key: k, State: Blocked, Reason: "blocked by admin"})
 	g.mu.Unlock()
 	g.cut(k)
 }
@@ -186,7 +168,16 @@ func (g *Gate) Block(k key.NodePublic) {
 func (g *Gate) Clients(state string) []Client {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.query(`SELECT `+cols+` FROM clients WHERE state = ? ORDER BY last_seen DESC`, state)
+	rows, err := g.app.FindRecordsByFilter("clients", "state = {:state}", "-last_seen", 0, 0, dbx.Params{"state": state})
+	if err != nil {
+		g.logf("clients: %v", err)
+		return nil
+	}
+	out := make([]Client, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, clientFromRecord(r))
+	}
+	return out
 }
 
 // admit is the only way a node becomes Approved.
@@ -202,12 +193,15 @@ func (g *Gate) admitLocked(k key.NodePublic, cert []byte) error {
 	}
 	r, err := Verify(cert, g.caList(), k, time.Now())
 	if err != nil {
-		// Keep why, for the admin, in case this key times out unapproved.
-		g.exec(`UPDATE clients SET reason = ? WHERE node_key = ? AND state = 'probation'`, err.Error(), k.String())
+		c := g.get(k)
+		if c.State == Probation {
+			c.Reason = err.Error()
+			_ = g.put(c)
+		}
 		return err
 	}
 	if err := g.put(Client{Key: k, State: Approved, CA: Fingerprint(r.CA), Name: r.ID, Expires: r.Exp}); err != nil {
-		return err // not approved: the client must not be told it was
+		return err
 	}
 	g.logf("approved %v (%s) until %v", k.ShortString(), r.ID, r.Exp)
 	return nil
@@ -348,17 +342,32 @@ func (g *Gate) guard(c net.Conn, h func(net.Conn)) {
 // sweep moves rows past their deadline to their next state.
 func (g *Gate) sweep() {
 	g.mu.Lock()
+	rows, err := g.records()
+	if err != nil {
+		g.logf("clients: %v", err)
+		g.mu.Unlock()
+		return
+	}
+	now := time.Now()
 	var cut []key.NodePublic
-	for _, c := range g.query(`SELECT `+cols+` FROM clients WHERE state != 'blocked' AND expires <= ?`, time.Now().Unix()) {
-		switch {
-		case c.State == Rejected:
-			g.exec(`DELETE FROM clients WHERE node_key = ?`, c.Key.String())
-		case c.State == Approved && c.CA == g.selfFP:
-			g.approveLocked(c.Key) // this host's own approvals renew
-		case c.State == Approved:
-			g.reject(c.Key, "certificate expired")
-			cut = append(cut, c.Key)
-		case c.State == Probation:
+	for _, record := range rows {
+		c := clientFromRecord(record)
+		if c.State == Blocked || c.Expires.After(now) {
+			continue
+		}
+		switch c.State {
+		case Rejected:
+			if err := g.app.Delete(record); err != nil {
+				g.logf("clients: %v", err)
+			}
+		case Approved:
+			if c.CA == g.selfFP {
+				_ = g.approveLocked(c.Key)
+			} else {
+				g.reject(c.Key, "certificate expired")
+				cut = append(cut, c.Key)
+			}
+		case Probation:
 			g.reject(c.Key, c.Reason)
 			cut = append(cut, c.Key)
 		}
@@ -367,13 +376,21 @@ func (g *Gate) sweep() {
 	g.cut(cut...)
 }
 
-// reject quarantines k and keeps the list bounded. Only never-approved rows
-// are dropped to make room: a flood of throwaway keys cannot push out a known
-// node. Callers hold g.mu.
+// reject quarantines k and keeps the never-approved rejected list bounded.
 func (g *Gate) reject(k key.NodePublic, reason string) {
-	g.setState(k, Rejected, reason, time.Now().Add(g.RejectTTL))
-	g.exec(`DELETE FROM clients WHERE node_key IN (
-		SELECT node_key FROM clients WHERE state = 'rejected' AND ca = '' ORDER BY last_seen DESC LIMIT -1 OFFSET ?)`, g.MaxRejected)
+	_ = g.setState(k, Rejected, reason, time.Now().Add(g.RejectTTL))
+	rows, err := g.app.FindRecordsByFilter("clients", "state = 'rejected' && ca = ''", "-last_seen", 0, 0)
+	if err != nil {
+		g.logf("clients: %v", err)
+		return
+	}
+	if len(rows) > g.MaxRejected {
+		for _, record := range rows[g.MaxRejected:] {
+			if err := g.app.Delete(record); err != nil {
+				g.logf("clients: %v", err)
+			}
+		}
+	}
 }
 
 // cut closes the keys' open connections while they are still routed, so the
@@ -389,6 +406,9 @@ func (g *Gate) cut(keys ...key.NodePublic) {
 			c.Close()
 		}
 		time.AfterFunc(time.Second, func() {
+			if g.app.DB() == nil {
+				return
+			}
 			g.mu.Lock()
 			live := g.live(g.get(k), time.Now())
 			g.mu.Unlock()
@@ -407,84 +427,106 @@ func (g *Gate) caList() []ed25519.PublicKey {
 	return out
 }
 
-// Database helpers; callers hold g.mu. Errors are logged and returned. The
-// admission hook cannot report one, but a failed write leaves the row in its
-// old state, which fails closed; admit returns it to the caller. The
-// database has one connection, so never hold rows open across another call.
-
-func (g *Gate) exec(q string, args ...any) error {
-	_, err := g.db.Exec(q, args...)
-	if err != nil {
-		g.logf("clients: %v", err)
+func clientFromRecord(r *core.Record) Client {
+	var c Client
+	if err := c.Key.UnmarshalText([]byte(r.GetString("node_key"))); err != nil {
+		return Client{}
 	}
-	return err
+	c.State, c.CA, c.Name, c.Reason = r.GetString("state"), r.GetString("ca"), r.GetString("name"), r.GetString("reason")
+	c.Expires = r.GetDateTime("expires").Time()
+	c.FirstSeen = r.GetDateTime("first_seen").Time()
+	c.LastSeen = r.GetDateTime("last_seen").Time()
+	return c
 }
 
-// put writes a whole row, including who approved it.
+func (g *Gate) records() ([]*core.Record, error) { return g.app.FindAllRecords("clients") }
+
+// put saves a complete gate row while preserving its original first-seen time.
 func (g *Gate) put(c Client) error {
-	now := time.Now().Unix()
-	return g.exec(`INSERT INTO clients (`+cols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(node_key) DO UPDATE SET state = excluded.state, ca = excluded.ca, name = excluded.name,
-			expires = excluded.expires, reason = excluded.reason, last_seen = excluded.last_seen`,
-		c.Key.String(), c.State, c.CA, c.Name, unix(c.Expires), c.Reason, now, now)
+	r, err := g.app.FindFirstRecordByData("clients", "node_key", c.Key.String())
+	now := time.Now()
+	if err != nil {
+		if !strings.Contains(err.Error(), "no rows in result set") {
+			return err
+		}
+		r = core.NewRecord(mustGateCollection(g.app))
+		r.Set("node_key", c.Key.String())
+		r.Set("first_seen", now)
+	} else if c.FirstSeen.IsZero() {
+		c.FirstSeen = r.GetDateTime("first_seen").Time()
+	}
+	if c.LastSeen.IsZero() {
+		c.LastSeen = now
+	}
+	r.Set("state", c.State)
+	r.Set("ca", c.CA)
+	r.Set("name", c.Name)
+	r.Set("expires", c.Expires)
+	r.Set("reason", c.Reason)
+	r.Set("last_seen", c.LastSeen)
+	r.Set("first_seen", c.FirstSeen)
+	return g.app.Save(r)
 }
 
-// setState moves k to state, leaving who approved it alone.
+func mustGateCollection(app core.App) *core.Collection {
+	c, _ := app.FindCollectionByNameOrId("clients")
+	return c
+}
+
 func (g *Gate) setState(k key.NodePublic, state, reason string, expires time.Time) error {
-	now := time.Now().Unix()
-	return g.exec(`INSERT INTO clients (node_key, state, reason, expires, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT(node_key) DO UPDATE SET state = excluded.state, reason = excluded.reason,
-			expires = excluded.expires, last_seen = excluded.last_seen`,
-		k.String(), state, reason, unix(expires), now, now)
-}
-
-func unix(t time.Time) int64 {
-	if t.IsZero() {
-		return 0
+	c := g.get(k)
+	if c.FirstSeen.IsZero() {
+		c.Key = k
+		c.FirstSeen = time.Now()
 	}
-	return t.Unix()
+	c.State, c.Reason, c.Expires, c.LastSeen = state, reason, expires, time.Now()
+	return g.put(c)
 }
 
-// get returns k's row, or the zero Client (empty State) if there is none.
+func (g *Gate) delete(k key.NodePublic) {
+	r, err := g.app.FindFirstRecordByData("clients", "node_key", k.String())
+	if err == nil {
+		if err := g.app.Delete(r); err != nil {
+			g.logf("clients: %v", err)
+		}
+	}
+}
+
 func (g *Gate) get(k key.NodePublic) Client {
-	if rows := g.query(`SELECT `+cols+` FROM clients WHERE node_key = ?`, k.String()); len(rows) > 0 {
-		return rows[0]
+	r, err := g.app.FindFirstRecordByData("clients", "node_key", k.String())
+	if err != nil {
+		return Client{}
 	}
-	return Client{}
+	return clientFromRecord(r)
 }
 
 func (g *Gate) count(state string) (n int) {
-	g.db.QueryRow(`SELECT COUNT(*) FROM clients WHERE state = ?`, state).Scan(&n)
-	return n
+	rows, err := g.app.FindRecordsByFilter("clients", "state = {:state}", "", 0, 0, dbx.Params{"state": state})
+	if err != nil {
+		g.logf("clients: %v", err)
+		return 0
+	}
+	return len(rows)
 }
 
-// strangers counts the never-approved nodes holding a probation slot.
 func (g *Gate) strangers() (n int) {
-	g.db.QueryRow(`SELECT COUNT(*) FROM clients WHERE state = 'probation' AND ca = ''`).Scan(&n)
-	return n
+	rows, err := g.app.FindRecordsByFilter("clients", "state = 'probation' && ca = ''", "", 0, 0)
+	if err != nil {
+		g.logf("clients: %v", err)
+		return 0
+	}
+	return len(rows)
 }
 
-func (g *Gate) query(q string, args ...any) []Client {
-	rs, err := g.db.Query(q, args...)
+func (g *Gate) queryState(state string) []Client {
+	rows, err := g.app.FindRecordsByFilter("clients", "state = {:state}", "-last_seen", 0, 0, dbx.Params{"state": state})
 	if err != nil {
 		g.logf("clients: %v", err)
 		return nil
 	}
-	defer rs.Close()
-	var out []Client
-	for rs.Next() {
-		var c Client
-		var nk string
-		var exp, first, last int64
-		if err := rs.Scan(&nk, &c.State, &c.CA, &c.Name, &exp, &c.Reason, &first, &last); err != nil {
-			g.logf("clients: %v", err)
-			continue
-		}
-		if err := c.Key.UnmarshalText([]byte(nk)); err != nil {
-			continue
-		}
-		c.Expires, c.FirstSeen, c.LastSeen = time.Unix(exp, 0), time.Unix(first, 0), time.Unix(last, 0)
-		out = append(out, c)
+	out := make([]Client, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, clientFromRecord(r))
 	}
 	return out
 }

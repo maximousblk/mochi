@@ -152,7 +152,7 @@ func newUI(t *testing.T, withGate bool, hosts []state.Host, connectors ...connec
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	store, err := state.OpenState(filepath.Join(dir, "mochi.db"), "")
+	store, err := state.Open(filepath.Join(dir, "data"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func newUI(t *testing.T, withGate bool, hosts []state.Host, connectors ...connec
 	e.app = a
 	if withGate {
 		extPub, _, _ := ed25519.GenerateKey(nil)
-		g, err := admission.NewGate(store.DB(), id.Private(), []ed25519.PublicKey{extPub})
+		g, err := admission.NewGate(store.App(), id.Private(), []ed25519.PublicKey{extPub})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -917,7 +917,7 @@ func TestUIReceivedTextInbox(t *testing.T) {
 	pump(func() bool { return len(e.app.inbox) == 1 })
 
 	note := <-notes
-	if want := fmt.Sprintf("mochi-text:%d", e.app.inbox[0].ID); note.ID != want {
+	if want := fmt.Sprintf("mochi-text:%s", e.app.inbox[0].ID); note.ID != want {
 		t.Fatalf("notification ID %q, want %q", note.ID, want)
 	}
 	if note.Title != "Text from 100.64.0.9:4000" || note.Body != body {

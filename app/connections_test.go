@@ -32,7 +32,7 @@ func (c *fakeClient) Disconnect() error {
 
 // queuedApp returns an app whose UI work lands on the returned queue, for
 // tests that start work off the UI thread and then apply its result by hand.
-func queuedApp(store *state.StateStore) (*app, chan func()) {
+func queuedApp(store *state.Store) (*app, chan func()) {
 	q := make(chan func(), 16)
 	return &app{store: store, runOnUI: func(fn func()) { q <- fn }}, q
 }
@@ -50,7 +50,7 @@ func runQueued(t *testing.T, q chan func()) {
 
 // Removing a host disconnects each of its clients, then forgets the host.
 func TestRemoveHostDisconnectsItsClients(t *testing.T) {
-	store, err := state.OpenState(filepath.Join(t.TempDir(), "mochi.db"), "")
+	store, err := state.Open(filepath.Join(t.TempDir(), "data"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestRemoveHostDisconnectsItsClients(t *testing.T) {
 
 // A client that cannot disconnect keeps its host: the removal reports why.
 func TestRemoveHostKeepsHostWhenDisconnectFails(t *testing.T) {
-	store, err := state.OpenState(filepath.Join(t.TempDir(), "mochi.db"), "")
+	store, err := state.Open(filepath.Join(t.TempDir(), "data"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -5,21 +5,20 @@ import (
 	"path/filepath"
 )
 
-// Path is the state database of this user: mochi.db in the user config directory.
-func Path() (string, error) {
+// Dir returns Mochi's per-user directory for logs and PocketBase data.
+func Dir() (string, error) {
 	base, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, "mochi", "mochi.db"), nil
+	return filepath.Join(base, "mochi"), nil
 }
 
-// LegacyPath is the JSON file older builds kept their hosts in. It is migrated
-// into the database when present.
-func LegacyPath() (string, error) {
-	base, err := os.UserConfigDir()
+// DataDir returns the PocketBase database directory.
+func DataDir() (string, error) {
+	dir, err := Dir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, "mochi", "config.json"), nil
+	return filepath.Join(dir, "data"), nil
 }

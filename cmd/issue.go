@@ -46,15 +46,11 @@ func Issue(args []string) error {
 		}
 		priv = p
 	} else {
-		path, err := state.Path()
+		dataDir, err := state.DataDir()
 		if err != nil {
 			return err
 		}
-		legacy, err := state.LegacyPath()
-		if err != nil {
-			return err
-		}
-		store, err := state.OpenState(path, legacy)
+		store, err := state.Open(dataDir)
 		if err != nil {
 			return err
 		}

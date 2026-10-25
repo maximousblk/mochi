@@ -70,7 +70,7 @@ func (a *app) keepText(sender string, t textsender.Text) {
 		return
 	}
 	opts := mygo.NotificationOptions{
-		ID:    fmt.Sprintf("%s%d", textNotificationPrefix, id),
+		ID:    fmt.Sprintf("%s%s", textNotificationPrefix, id),
 		Title: "Text from " + sender,
 		Body:  notificationBody(t),
 		Group: "mochi-text",
@@ -149,8 +149,8 @@ func (a *app) notificationClicked(id string) {
 // deleteText removes one saved text off the UI thread, then reloads the Inbox.
 // The delete is keyed by the text, so a second click on the same text does
 // nothing while the first is still running.
-func (a *app) deleteText(id int64) {
-	a.async(fmt.Sprintf("text-delete|%d", id), func() error {
+func (a *app) deleteText(id string) {
+	a.async("text-delete|"+id, func() error {
 		return a.store.DeleteReceivedText(id)
 	}, func(err error) {
 		if err != nil {

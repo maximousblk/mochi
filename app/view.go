@@ -394,7 +394,7 @@ func (a *app) settingsView(c *ui.Context) {
 	theme := c.Theme()
 	ui.Text(c, "Settings").FontSize(24).Bold()
 	ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
-		dbPath := a.store.DatabasePath()
+		dbPath := a.store.DataDir()
 		ui.Text(c, "Database: "+dbPath).TextColor(theme.TextMuted).SingleLine().MinWidth(0).Grow(1).Tooltip(dbPath)
 		if iconButton(c, folderIcon, "Open containing folder").Clicked() {
 			a.openContaining(dbPath)

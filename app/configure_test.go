@@ -44,7 +44,7 @@ func TestUIConfigureServerPortRestartsServer(t *testing.T) {
 		t.Fatalf("after Save: port 1 served=%v, port 2005 served=%v; want only 2005",
 			e.app.ports.Registered(1), e.app.ports.Registered(2005))
 	}
-	saved, err := e.app.store.Config(connector.ServerConfigKey(recv))
+	saved, err := e.app.store.LauncherConfig(recv.Name(), "")
 	if err != nil || saved["port"] != "2005" {
 		t.Fatalf("saved server config = %v, %v; want port 2005", saved, err)
 	}
@@ -78,7 +78,7 @@ func TestUIConfigureInvalidPortChangesNothing(t *testing.T) {
 	if !e.app.ports.Registered(1) {
 		t.Fatal("an invalid port changed what the server serves")
 	}
-	if saved, err := e.app.store.Config(connector.ServerConfigKey(recv)); err != nil || len(saved) != 0 {
+	if saved, err := e.app.store.LauncherConfig(recv.Name(), ""); err != nil || len(saved) != 0 {
 		t.Fatalf("an invalid port was saved: %v, %v", saved, err)
 	}
 }
@@ -98,8 +98,7 @@ func TestUIConfigureHostTileSavesAndRemoveDeletes(t *testing.T) {
 	d.click("Save")
 	e.idle()
 
-	key := connector.ClientConfigKey("Files", h.Address)
-	if saved, err := e.app.store.Config(key); err != nil || saved["port"] != "9100" {
+	if saved, err := e.app.store.LauncherConfig("Files", h.Address); err != nil || saved["port"] != "9100" {
 		t.Fatalf("saved client config = %v, %v; want port 9100", saved, err)
 	}
 	if e.dialogOpen("Files for lab") {
@@ -109,7 +108,7 @@ func TestUIConfigureHostTileSavesAndRemoveDeletes(t *testing.T) {
 	e.click("Remove host")
 	e.dialog("Remove lab?").click("Yes")
 	e.idle()
-	if saved, err := e.app.store.Config(key); err != nil || len(saved) != 0 {
+	if saved, err := e.app.store.LauncherConfig("Files", h.Address); err != nil || len(saved) != 0 {
 		t.Fatalf("client config of a removed host = %v, %v; want none", saved, err)
 	}
 }
