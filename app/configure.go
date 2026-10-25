@@ -28,17 +28,14 @@ func clientTarget(name string, host state.Host, fields []connector.Field) config
 	return configTarget{title: name + " for " + host.Name, fields: fields, name: name, host: host}
 }
 
-// key identifies the target's dialog without relying on serialized settings keys.
-func (t configTarget) key() string {
+// dialogKey is the identity of the target's Configure window: one per server,
+// and one per launcher and host.
+func (t configTarget) dialogKey() string {
 	if t.server != nil {
-		return "server:" + t.server.Name()
+		return "configure|server:" + t.server.Name()
 	}
-	return "client:" + t.name + ":" + t.host.Address
+	return "configure|client:" + t.name + ":" + t.host.Address
 }
-
-// dialogKey is the identity of the target's Configure window. A target has one
-// settings key, so it has one window.
-func (t configTarget) dialogKey() string { return "configure|" + t.key() }
 
 // hostAddress is the address of the host the target concerns, or "" for a
 // server target, which concerns no host.

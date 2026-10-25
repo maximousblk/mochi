@@ -57,7 +57,7 @@ Coverage numbers are a diagnostic, not a goal.
 | Removing a host while its Connect is pending disconnects the late client | `app/ui_test.go`: `TestRemovingAHostDisconnectsALateConnect` |
 | A status belongs to its host: the bar names it and links to it from Settings, and a removed host's status is not a link | `app/ui_test.go`: `TestUIStatusIsScopedToItsPage` |
 | Each Configure dialog is its own window: one per target, focused when reopened, and the main window works while they are open | `app/configure_test.go`: `TestConfigureDialogsAreIndependentWindows` |
-| Persistent state: hosts, settings, identity, migrations | `internal/state/state_test.go` |
+| Persistent state: hosts, settings, identity, received texts | `internal/state/state_test.go`, `internal/state/received_texts_test.go` |
 
 ## Running
 

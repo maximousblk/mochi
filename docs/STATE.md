@@ -8,7 +8,7 @@ macOS:   ~/Library/Application Support/mochi/data/
 Windows: %AppData%\mochi\data\
 ```
 
-The directory contains PocketBase's `data.db` and auxiliary database. Collections and typed fields are installed by Go migrations. Hosts, launcher settings, machine identity and server parameters, certificates, received texts, and admission clients are PocketBase records. Host deletion cascades to its launcher settings. Received texts are pruned to the newest 100 records.
+The directory holds an embedded PocketBase: `data.db`, `auxiliary.db` and PocketBase's `.notify` directory, which keeps two Mochi processes on one directory (the app and `mochi issue`) in step. PocketBase is never served; Mochi uses its record API. Mochi creates its collections when they are missing (`internal/state/schema.go`); there are no versioned migrations, so a schema change edits that file and existing data is moved by hand. Hosts, launcher settings, machine identity and server parameters, certificates, received texts, and admission clients are PocketBase records. Host deletion cascades to its launcher settings. Received texts are pruned to the newest 100 records. PocketBase's own log table is turned off; Mochi logs to `mochi.log`.
 
 The machine identity seed and server pre-shared key are hidden record fields, but are stored unencrypted. Anyone who can read the data directory can act as this machine. Moving secrets to the platform keychain is not implemented.
 

@@ -537,8 +537,11 @@ func (a *app) launchServer() (*tailcat.Server, *admission.Gate, context.CancelFu
 	if err := s.Start(); err != nil {
 		return nil, nil, nil, err
 	}
-	runCtx, stop := context.WithCancel(context.Background())
+	runCtx, cancel := context.WithCancel(context.Background())
 	go gate.Run(runCtx)
+	// Stopping closes the gate at once, not when Run notices, so nothing the
+	// gate scheduled reads the store after the app closes it.
+	stop := func() { cancel(); gate.Close() }
 	go func() {
 		t := time.NewTicker(2 * time.Second)
 		defer t.Stop()

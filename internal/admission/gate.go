@@ -3,19 +3,22 @@ package admission
 import (
 	"context"
 	"crypto/ed25519"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/pocketbase/dbx"
-	"github.com/pocketbase/pocketbase/core"
-	"github.com/tailscale/tailcat"
 	"io"
 	"net"
 	"sort"
 	"strings"
 	"sync"
-	"tailscale.com/types/key"
 	"time"
+
+	"github.com/pocketbase/dbx"
+	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/tools/types"
+	"github.com/tailscale/tailcat"
+	"tailscale.com/types/key"
 )
 
 // ProofPort is the tailcat port a Mochi host answers certificate proofs on.
@@ -31,16 +34,18 @@ const (
 	Blocked   = "blocked"   // never admitted, whatever certificate it holds, until an admin approves it
 )
 
-// A row's ca and name are set when a CA approves the node and survive later
+// A record's ca and name are set when a CA approves the node and survive later
 // state changes, so a node that was approved once is "known" until its
-// rejected row is forgotten (RejectTTL). Block, or its CA leaving the trusted
-// set, clears them. Known nodes never count against the probation slots.
+// rejected record is forgotten (RejectTTL). Block, or its CA leaving the
+// trusted set, clears them. Known nodes never count against the probation slots.
 
-// Client is one admission record.
+// Client is one record of the clients collection.
 type Client struct {
 	Key                 key.NodePublic
-	State, CA, Name     string
-	Expires             time.Time
+	State               string
+	CA                  string    // fingerprint of the CA that last approved it; "" = never approved
+	Name                string    // who that certificate was issued to
+	Expires             time.Time // deadline for the current state; zero = none
 	Reason              string
 	FirstSeen, LastSeen time.Time
 }
@@ -56,22 +61,29 @@ const (
 // or from a renewal, goes through admit.
 type Gate struct {
 	ProofPort    uint16
-	MaxProbation int
-	ProofTimeout time.Duration
-	RejectTTL    time.Duration
-	MaxRejected  int
-	LocalTTL     time.Duration
+	MaxProbation int           // never-approved nodes allowed to hold a tunnel at once
+	ProofTimeout time.Duration // how long a node in probation has to be approved
+	RejectTTL    time.Duration // how long a rejected node stays listed
+	MaxRejected  int           // never-approved rejected records kept; the oldest are dropped
+	LocalTTL     time.Duration // lifetime of a certificate this host signs for itself
 	Logf         func(format string, args ...any)
-	srv          *tailcat.Server
-	app          core.App
-	self         ed25519.PrivateKey
-	selfFP       string
-	mu           sync.Mutex
-	cas          map[string]ed25519.PublicKey
-	conns        map[key.NodePublic]map[net.Conn]bool
+
+	srv    *tailcat.Server
+	app    core.App
+	self   ed25519.PrivateKey
+	selfFP string
+
+	mu     sync.Mutex                   // guards the clients collection, cas, conns and closed
+	cas    map[string]ed25519.PublicKey // by fingerprint; always includes this host's own key
+	conns  map[key.NodePublic]map[net.Conn]bool
+	closed bool // set by Close: the store may be gone, so nothing reads it again
 }
 
-// NewGate reconciles persisted admissions with the current trusted CA set.
+// NewGate reconciles the clients collection with the trusted set. The gate
+// trusts this host's own key (self) and the given keys, and nothing else: the
+// trusted set is fixed for the life of the gate. Probation records are dropped
+// as stale, and records approved by a key that is no longer trusted lose that
+// approval.
 func NewGate(app core.App, self ed25519.PrivateKey, trusted []ed25519.PublicKey) (*Gate, error) {
 	pub := self.Public().(ed25519.PublicKey)
 	g := &Gate{
@@ -126,18 +138,28 @@ func (g *Gate) Install(s *tailcat.Server, serve func(port uint16) func(net.Conn)
 	}
 }
 
-// Run expires approvals, probations and quarantine entries until ctx ends.
+// Run expires approvals, probations and quarantine entries until ctx ends,
+// then closes the gate.
 func (g *Gate) Run(ctx context.Context) {
 	t := time.NewTicker(250 * time.Millisecond)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			g.Close()
 			return
 		case <-t.C:
 			g.sweep()
 		}
 	}
+}
+
+// Close stops the gate's delayed work from reading the store, which its owner
+// may close next. Run closes the gate when it returns.
+func (g *Gate) Close() {
+	g.mu.Lock()
+	g.closed = true
+	g.mu.Unlock()
 }
 
 // Approve is what an admin does to a node it recognizes: sign a short-lived
@@ -339,22 +361,24 @@ func (g *Gate) guard(c net.Conn, h func(net.Conn)) {
 	h(c)
 }
 
-// sweep moves rows past their deadline to their next state.
+// sweep moves records past their deadline to their next state. Only those
+// records are read: it runs four times a second.
 func (g *Gate) sweep() {
 	g.mu.Lock()
-	rows, err := g.records()
+	if g.closed {
+		g.mu.Unlock()
+		return
+	}
+	rows, err := g.app.FindAllRecords("clients", dbx.NewExp("[[state]] != {:blocked} AND [[expires]] <= {:now}",
+		dbx.Params{"blocked": Blocked, "now": types.NowDateTime().String()}))
 	if err != nil {
 		g.logf("clients: %v", err)
 		g.mu.Unlock()
 		return
 	}
-	now := time.Now()
 	var cut []key.NodePublic
 	for _, record := range rows {
 		c := clientFromRecord(record)
-		if c.State == Blocked || c.Expires.After(now) {
-			continue
-		}
 		switch c.State {
 		case Rejected:
 			if err := g.app.Delete(record); err != nil {
@@ -376,19 +400,20 @@ func (g *Gate) sweep() {
 	g.cut(cut...)
 }
 
-// reject quarantines k and keeps the never-approved rejected list bounded.
+// reject quarantines k and keeps the list bounded. Only never-approved records
+// are dropped to make room: a flood of throwaway keys cannot push out a known
+// node. Callers hold g.mu.
 func (g *Gate) reject(k key.NodePublic, reason string) {
 	_ = g.setState(k, Rejected, reason, time.Now().Add(g.RejectTTL))
-	rows, err := g.app.FindRecordsByFilter("clients", "state = 'rejected' && ca = ''", "-last_seen", 0, 0)
+	extra, err := g.app.FindRecordsByFilter("clients", "state = {:rejected} && ca = ''", "-last_seen", 0, g.MaxRejected,
+		dbx.Params{"rejected": Rejected})
 	if err != nil {
 		g.logf("clients: %v", err)
 		return
 	}
-	if len(rows) > g.MaxRejected {
-		for _, record := range rows[g.MaxRejected:] {
-			if err := g.app.Delete(record); err != nil {
-				g.logf("clients: %v", err)
-			}
+	for _, record := range extra {
+		if err := g.app.Delete(record); err != nil {
+			g.logf("clients: %v", err)
 		}
 	}
 }
@@ -406,10 +431,11 @@ func (g *Gate) cut(keys ...key.NodePublic) {
 			c.Close()
 		}
 		time.AfterFunc(time.Second, func() {
-			if g.app.DB() == nil {
+			g.mu.Lock()
+			if g.closed {
+				g.mu.Unlock()
 				return
 			}
-			g.mu.Lock()
 			live := g.live(g.get(k), time.Now())
 			g.mu.Unlock()
 			if !live {
@@ -439,19 +465,24 @@ func clientFromRecord(r *core.Record) Client {
 	return c
 }
 
-func (g *Gate) records() ([]*core.Record, error) { return g.app.FindAllRecords("clients") }
+// The helpers below read and write the clients collection; callers hold g.mu.
+// Errors are logged and returned. The admission hook cannot report one, but a
+// failed write leaves the record in its old state, which fails closed; admit
+// returns it to the caller.
+
+// missing reports whether a lookup found no record.
+func missing(err error) bool { return errors.Is(err, sql.ErrNoRows) }
 
 // put saves a complete gate row while preserving its original first-seen time.
 func (g *Gate) put(c Client) error {
 	r, err := g.app.FindFirstRecordByData("clients", "node_key", c.Key.String())
 	now := time.Now()
-	if err != nil {
-		if !strings.Contains(err.Error(), "no rows in result set") {
-			return err
-		}
+	if missing(err) {
 		r = core.NewRecord(mustGateCollection(g.app))
 		r.Set("node_key", c.Key.String())
 		r.Set("first_seen", now)
+	} else if err != nil {
+		return err
 	} else if c.FirstSeen.IsZero() {
 		c.FirstSeen = r.GetDateTime("first_seen").Time()
 	}
@@ -492,43 +523,33 @@ func (g *Gate) delete(k key.NodePublic) {
 	}
 }
 
+// get returns k's record, or the zero Client (empty State) if there is none.
 func (g *Gate) get(k key.NodePublic) Client {
 	r, err := g.app.FindFirstRecordByData("clients", "node_key", k.String())
 	if err != nil {
+		if !missing(err) {
+			g.logf("clients: %v", err)
+		}
 		return Client{}
 	}
 	return clientFromRecord(r)
 }
 
-func (g *Gate) count(state string) (n int) {
-	rows, err := g.app.FindRecordsByFilter("clients", "state = {:state}", "", 0, 0, dbx.Params{"state": state})
+func (g *Gate) count(state string) int {
+	n, err := g.app.CountRecords("clients", dbx.HashExp{"state": state})
 	if err != nil {
 		g.logf("clients: %v", err)
-		return 0
 	}
-	return len(rows)
+	return int(n)
 }
 
-func (g *Gate) strangers() (n int) {
-	rows, err := g.app.FindRecordsByFilter("clients", "state = 'probation' && ca = ''", "", 0, 0)
+// strangers counts the never-approved nodes holding a probation slot.
+func (g *Gate) strangers() int {
+	n, err := g.app.CountRecords("clients", dbx.HashExp{"state": Probation, "ca": ""})
 	if err != nil {
 		g.logf("clients: %v", err)
-		return 0
 	}
-	return len(rows)
-}
-
-func (g *Gate) queryState(state string) []Client {
-	rows, err := g.app.FindRecordsByFilter("clients", "state = {:state}", "-last_seen", 0, 0, dbx.Params{"state": state})
-	if err != nil {
-		g.logf("clients: %v", err)
-		return nil
-	}
-	out := make([]Client, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, clientFromRecord(r))
-	}
-	return out
+	return int(n)
 }
 
 func (g *Gate) logf(format string, args ...any) {

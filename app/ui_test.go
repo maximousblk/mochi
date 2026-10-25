@@ -197,6 +197,7 @@ func newUI(t *testing.T, withGate bool, hosts []state.Host, connectors ...connec
 		// Installed on a server that is never started: the handler hooks run only
 		// on connections, and DisconnectClient is a no-op without a server.
 		g.Install(&tailcat.Server{}, nil)
+		t.Cleanup(g.Close) // before the store closes: cleanups run last-in first-out
 		a.gate, e.gate = g, g
 	}
 	e.tt = ui.NewTester(func(c *ui.Context) {

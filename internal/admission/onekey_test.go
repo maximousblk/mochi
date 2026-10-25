@@ -41,6 +41,7 @@ func TestServerRestart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(g.Close) // before the store closes: cleanups run last-in first-out
 		s := &tailcat.Server{Key: id.NodeKey(state.RoleServer), PresharedKey: psk, Region: relay, Logf: testharness.Quiet}
 		g.Install(s, echoServe)
 		if err := s.Start(); err != nil {
@@ -88,6 +89,7 @@ func TestServeAndDialOnOneMachine(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(g.Close) // before the store closes: cleanups run last-in first-out
 		s := &tailcat.Server{Key: id.NodeKey(state.RoleServer), Region: relay, Logf: testharness.Quiet}
 		g.Install(s, echoServe)
 		if err := s.Start(); err != nil {

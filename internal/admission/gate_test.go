@@ -140,6 +140,7 @@ func newEnv(t *testing.T, tweak func(*Gate), trusted ...ed25519.PublicKey) *env 
 	t.Cleanup(func() { s.Close() })
 	runCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
+	t.Cleanup(g.Close) // before the store closes: cleanups run last-in first-out
 	go g.Run(runCtx)
 	return &env{t: t, gate: g, addr: s.TailcatAddr()}
 }
@@ -521,6 +522,7 @@ func offlineGate(t *testing.T, db *state.Store, self state.Identity, trusted ...
 		t.Fatal(err)
 	}
 	g.srv = &tailcat.Server{} // never started: DisconnectClient is a no-op
+	t.Cleanup(g.Close)        // before the store closes: cleanups run last-in first-out
 	return g
 }
 
